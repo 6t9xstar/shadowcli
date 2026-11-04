@@ -4,7 +4,7 @@
 
 <br/><br/>
 
-# ⚡ ShadowCLI
+# 👻 ShadowCLI
 
 ### *The Zero-Trust Execution Layer for AI Coding Agents*
 
