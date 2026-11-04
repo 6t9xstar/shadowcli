@@ -9,7 +9,8 @@
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-blue.svg?logo=linux)](https://kernel.org)
 [![Security](https://img.shields.io/badge/isolation-Landlock%20%7C%20Seccomp%20BPF-green.svg)](docs/security-model.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Zero Root](https://img.shields.io/badge/root-not%20required-success.svg)](docs/threat-model.md)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/6t9xstar)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/6t9xstar)
 
 <p align="center">
   <a href="#-quickstart">Quickstart</a> •
@@ -18,7 +19,7 @@
   <a href="#-command-reference">Commands</a> •
   <a href="#-agent-integrations">Agent Integrations</a> •
   <a href="#-security-guarantees">Security Guarantees</a> •
-  <a href="#-adversarial-tests">Adversarial Tests</a>
+  <a href="#-support--sponsorship">Sponsor</a>
 </p>
 
 ---
@@ -341,6 +342,32 @@ Commands:
 - [`crates/shadow-core`](crates/shadow-core): Platform-neutral session lifecycle, baseline stat + SHA256 hashing, change classification, regex secret redaction, and unified diff engine.
 - [`crates/shadow-sandbox`](crates/shadow-sandbox): Linux user namespaces, Landlock LSM enforcement, Seccomp BPF syscall deny filter, OverlayFS / CopyFS isolation, and PID 1 supervisor.
 - [`crates/shadow-cli`](crates/shadow-cli): User-facing command-line interface with interactive review UI and transactional apply engine.
+
+---
+
+## 💖 Support & Sponsorship
+
+Building and maintaining zero-trust kernel security infrastructure for autonomous AI agents is an active, ongoing effort. If ShadowCLI saves your machine from an accidental `rm -rf`, prevents a rogue script from leaking credentials, or helps secure your agentic workflows, please consider supporting future open-source development!
+
+<div align="center">
+
+<a href="https://github.com/sponsors/6t9xstar">
+  <img src="https://img.shields.io/badge/Sponsor%20on-GitHub%20Sponsors-ea4aaa?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="GitHub Sponsors" />
+</a>
+&nbsp;&nbsp;&nbsp;&nbsp;
+<a href="https://buymeacoffee.com/6t9xstar">
+  <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy Me A Coffee" />
+</a>
+
+<br/><br/>
+
+**Direct Support Links:**
+- 💖 **GitHub Sponsors**: [github.com/sponsors/6t9xstar](https://github.com/sponsors/6t9xstar)
+- ☕ **Buy Me a Coffee**: [buymeacoffee.com/6t9xstar](https://buymeacoffee.com/6t9xstar)
+
+*Your sponsorship helps fund continuous security audits, CI test infrastructure, macOS sandboxing research, and future open-source developer security tooling.*
+
+</div>
 
 ---
 
