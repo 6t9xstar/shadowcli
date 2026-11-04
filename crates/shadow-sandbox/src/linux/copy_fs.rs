@@ -20,8 +20,11 @@ pub fn setup_copy_workspace(project_root: &Path, copy_root: &Path) -> Result<()>
             .strip_prefix(project_root)
             .map_err(|e| SandboxError::Io(std::io::Error::other(e)))?;
 
-        // Skip .git internal directories for copy speed, but keep top-level .git marker
-        if rel_path.starts_with(".git") && rel_path != Path::new(".git") {
+        // Skip .git, target, node_modules internal directories for copy speed
+        if (rel_path.starts_with(".git") && rel_path != Path::new(".git"))
+            || (rel_path.starts_with("target") && rel_path != Path::new("target"))
+            || (rel_path.starts_with("node_modules") && rel_path != Path::new("node_modules"))
+        {
             continue;
         }
 

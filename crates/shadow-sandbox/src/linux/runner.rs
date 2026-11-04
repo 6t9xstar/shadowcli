@@ -59,32 +59,45 @@ impl SandboxRunner {
             return Ok(code);
         }
 
-        // OverlayFS Backend
+        // OverlayFS Backend with full namespace isolation (User, Mount, PID, IPC, UTS, Net)
         let merged_dir = paths.root.join("merged");
         std::fs::create_dir_all(&merged_dir)?;
 
-        // Execute inside unshare wrapper
-        let mut unshare_args = vec!["-U".to_string(), "-m".to_string(), "-r".to_string()];
+        let current_exe = std::env::current_exe()?;
+        let mut unshare_args = vec![
+            "-U".to_string(),           // User namespace
+            "-m".to_string(),           // Mount namespace
+            "-p".to_string(),           // PID namespace
+            "-f".to_string(),           // Fork into new PID namespace
+            "-i".to_string(),           // IPC namespace
+            "-u".to_string(),           // UTS namespace
+            "-r".to_string(),           // Map current UID -> 0
+            "--mount-proc".to_string(), // Fresh /proc for PID namespace
+        ];
 
         if !meta.allow_network {
-            unshare_args.push("-n".to_string());
+            unshare_args.push("-n".to_string()); // Network namespace
         }
 
-        let cmd_script = format!(
-            "mount -t overlay overlay -o lowerdir={},upperdir={},workdir={},userxattr {} && cd {} && exec \"$@\"",
-            project_root.display(),
-            paths.upper_dir.display(),
-            paths.work_dir.display(),
-            merged_dir.display(),
-            merged_dir.display(),
-        );
+        unshare_args.push(current_exe.to_string_lossy().to_string());
+        unshare_args.push("internal-exec".to_string());
+        unshare_args.push("--project".to_string());
+        unshare_args.push(project_root.to_string_lossy().to_string());
+        unshare_args.push("--merged".to_string());
+        unshare_args.push(merged_dir.to_string_lossy().to_string());
+        unshare_args.push("--upper".to_string());
+        unshare_args.push(paths.upper_dir.to_string_lossy().to_string());
+        unshare_args.push("--work".to_string());
+        unshare_args.push(paths.work_dir.to_string_lossy().to_string());
 
-        unshare_args.extend([
-            "sh".to_string(),
-            "-c".to_string(),
-            cmd_script,
-            "shadow-exec".to_string(),
-        ]);
+        if meta.allow_network {
+            unshare_args.push("--allow-network".to_string());
+        }
+        if policy.isolation.allow_host_home {
+            unshare_args.push("--allow-host-home".to_string());
+        }
+
+        unshare_args.push("--".to_string());
         unshare_args.extend(meta.command.clone());
 
         let mut cmd = Command::new("unshare");
@@ -118,6 +131,12 @@ impl SandboxRunner {
                 Ok(p) => p,
                 Err(_) => continue,
             };
+            if (rel.starts_with(".git") && rel != Path::new(".git"))
+                || (rel.starts_with("target") && rel != Path::new("target"))
+                || (rel.starts_with("node_modules") && rel != Path::new("node_modules"))
+            {
+                continue;
+            }
             let dest = upper_dir.join(rel);
             let meta = match std::fs::symlink_metadata(path) {
                 Ok(m) => m,

@@ -132,4 +132,32 @@ pub enum Commands {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+
+    /// Internal sandbox child executor (hidden)
+    #[command(hide = true)]
+    InternalExec {
+        #[arg(long)]
+        project: PathBuf,
+
+        #[arg(long)]
+        merged: PathBuf,
+
+        #[arg(long)]
+        upper: PathBuf,
+
+        #[arg(long)]
+        work: PathBuf,
+
+        #[arg(long)]
+        policy: Option<PathBuf>,
+
+        #[arg(long)]
+        allow_network: bool,
+
+        #[arg(long)]
+        allow_host_home: bool,
+
+        #[arg(trailing_var_arg = true, required = true)]
+        cmd: Vec<String>,
+    },
 }

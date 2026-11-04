@@ -1,5 +1,5 @@
 use crate::cli::FsMode;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use colored::*;
 use shadow_core::{
     classify_changes, DiffRenderer, ProjectManifest, SessionBackend, SessionState, SessionStore,
@@ -20,10 +20,20 @@ pub fn execute(
     cmd: Vec<String>,
     current_dir: &Path,
 ) -> Result<i32> {
-    let project_root = project_arg
-        .unwrap_or_else(|| current_dir.to_path_buf())
-        .canonicalize()
-        .unwrap_or_else(|_| current_dir.to_path_buf());
+    let project_root = match project_arg {
+        Some(p) => {
+            if !p.exists() {
+                bail!(
+                    "Specified project directory does not exist: {}",
+                    p.display()
+                );
+            }
+            p.canonicalize().unwrap_or(p)
+        }
+        None => current_dir
+            .canonicalize()
+            .unwrap_or_else(|_| current_dir.to_path_buf()),
+    };
 
     // 1. Run Preflight Doctor Checks
     let doctor_report = run_doctor(&project_root);

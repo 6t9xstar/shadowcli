@@ -42,10 +42,13 @@ impl ProjectManifest {
             .as_secs();
 
         for entry in WalkDir::new(&canonical_root).into_iter().filter_entry(|e| {
-            // Do not index .git directory internal objects for baseline speed, but index top-level .git
+            // Do not index .git, target, node_modules internal directories for baseline speed
             let p = e.path();
             if let Ok(rel) = p.strip_prefix(&canonical_root) {
-                if rel.starts_with(".git") && rel != Path::new(".git") {
+                if (rel.starts_with(".git") && rel != Path::new(".git"))
+                    || (rel.starts_with("target") && rel != Path::new("target"))
+                    || (rel.starts_with("node_modules") && rel != Path::new("node_modules"))
+                {
                     return false;
                 }
             }

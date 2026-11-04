@@ -80,6 +80,7 @@ impl Default for ShadowPolicy {
                     "/lib64".to_string(),
                     "/etc".to_string(),
                     "/opt".to_string(),
+                    "/proc".to_string(),
                 ],
                 runtime_home_paths: vec![
                     ".cargo".to_string(),

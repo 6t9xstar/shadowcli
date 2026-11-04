@@ -76,6 +76,25 @@ fn main() -> ExitCode {
             let p = path.unwrap_or(current_dir);
             commands::doctor::execute(&p)
         }
+        Commands::InternalExec {
+            project,
+            merged,
+            upper,
+            work,
+            policy,
+            allow_network,
+            allow_host_home,
+            cmd,
+        } => commands::internal_exec::execute(
+            project,
+            merged,
+            upper,
+            work,
+            policy,
+            allow_network,
+            allow_host_home,
+            cmd,
+        ),
     };
 
     match result {

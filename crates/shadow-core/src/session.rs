@@ -82,20 +82,28 @@ impl SessionStore {
     }
 
     pub fn default_dir() -> PathBuf {
-        if let Ok(state_home) = std::env::var("XDG_STATE_HOME") {
-            PathBuf::from(state_home).join("shadowcli").join("sessions")
-        } else if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home)
-                .join(".local")
-                .join("state")
-                .join("shadowcli")
-                .join("sessions")
-        } else if let Ok(user_profile) = std::env::var("USERPROFILE") {
-            PathBuf::from(user_profile)
-                .join(".shadowcli")
-                .join("sessions")
-        } else {
-            PathBuf::from(".shadowcli").join("sessions")
+        #[cfg(target_os = "linux")]
+        {
+            let uid = unsafe { libc::getuid() };
+            PathBuf::from(format!("/var/tmp/shadowcli-{uid}/sessions"))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            if let Ok(state_home) = std::env::var("XDG_STATE_HOME") {
+                PathBuf::from(state_home).join("shadowcli").join("sessions")
+            } else if let Ok(home) = std::env::var("HOME") {
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("state")
+                    .join("shadowcli")
+                    .join("sessions")
+            } else if let Ok(user_profile) = std::env::var("USERPROFILE") {
+                PathBuf::from(user_profile)
+                    .join(".shadowcli")
+                    .join("sessions")
+            } else {
+                PathBuf::from(".shadowcli").join("sessions")
+            }
         }
     }
 

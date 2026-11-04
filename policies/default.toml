@@ -52,7 +52,8 @@ runtime_read_paths = [
     "/lib",
     "/lib64",
     "/etc",
-    "/opt"
+    "/opt",
+    "/proc"
 ]
 
 # Paths within user home permitted read-only if present (e.g. dev toolchains)

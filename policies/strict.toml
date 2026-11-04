@@ -40,7 +40,8 @@ runtime_read_paths = [
     "/bin",
     "/lib",
     "/lib64",
-    "/etc"
+    "/etc",
+    "/proc"
 ]
 
 runtime_home_paths = []
