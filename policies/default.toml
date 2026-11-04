@@ -1,0 +1,76 @@
+# ShadowCLI Default Security Policy
+version = "1"
+name = "default"
+description = "Balanced policy for standard AI coding agents: no host network, restricted filesystem, stripped secrets."
+
+[isolation]
+allow_network = false
+allow_host_home = false
+private_tmp = true
+strip_credentials = true
+fs_mode = "auto" # "auto", "overlay", or "copy"
+timeout_seconds = 300
+
+[environment]
+# Environment variables permitted into the sandbox
+allowed_variables = [
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "TZ",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "NODE_PATH",
+    "NVM_DIR"
+]
+
+# Sensitive patterns that will NEVER pass unless explicitly passed via --env
+denied_patterns = [
+    "*TOKEN*",
+    "*SECRET*",
+    "*KEY*",
+    "*PASS*",
+    "AWS_*",
+    "GH_*",
+    "GITHUB_*",
+    "OPENAI_*",
+    "ANTHROPIC_*",
+    "GEMINI_*"
+]
+
+[filesystem]
+# System paths granted read-only & execution access inside Landlock
+runtime_read_paths = [
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/etc",
+    "/opt"
+]
+
+# Paths within user home permitted read-only if present (e.g. dev toolchains)
+runtime_home_paths = [
+    ".cargo",
+    ".rustup",
+    ".nvm",
+    ".npm",
+    ".local"
+]
+
+# Protected paths that require explicit confirmation before applying changes
+protected_paths = [
+    ".git/**",
+    ".env*",
+    "*.pem",
+    "*.key",
+    "id_*",
+    "shadow.toml",
+    ".shadow/**"
+]

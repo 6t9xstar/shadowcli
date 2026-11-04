@@ -1,0 +1,3 @@
+[http]
+multiplexing = false
+check-revoke = false

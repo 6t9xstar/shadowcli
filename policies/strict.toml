@@ -1,0 +1,56 @@
+# ShadowCLI Strict Security Policy
+version = "1"
+name = "strict"
+description = "Hardened policy for untrusted or unknown agent commands: zero network, strict Landlock, minimal tools."
+
+[isolation]
+allow_network = false
+allow_host_home = false
+private_tmp = true
+strip_credentials = true
+fs_mode = "auto"
+timeout_seconds = 120
+
+[environment]
+allowed_variables = [
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "LANG",
+    "TERM"
+]
+
+denied_patterns = [
+    "*TOKEN*",
+    "*SECRET*",
+    "*KEY*",
+    "*PASS*",
+    "AWS_*",
+    "GH_*",
+    "GITHUB_*",
+    "OPENAI_*",
+    "ANTHROPIC_*",
+    "GEMINI_*"
+]
+
+[filesystem]
+runtime_read_paths = [
+    "/usr",
+    "/bin",
+    "/lib",
+    "/lib64",
+    "/etc"
+]
+
+runtime_home_paths = []
+
+protected_paths = [
+    ".git/**",
+    ".env*",
+    "*.pem",
+    "*.key",
+    "id_*",
+    "shadow.toml",
+    ".shadow/**"
+]

@@ -1,0 +1,406 @@
+I reviewed this blueprint carefully. The person is essentially asking you to stop discussing the idea and start building ShadowCLI, beginning with a working Rust proof of concept.
+
+The direction is good, but there are a few important engineering details to correct before you give your coding AI the implementation prompt.
+
+## 1. What exactly are they asking you to build?
+
+They want you to create the initial working version of ShadowCLI with three core capabilities:
+
+| Phase                   | What they want                | Expected result                                 |
+| ----------------------- | ----------------------------- | ----------------------------------------------- |
+| 1. Filesystem isolation | OverlayFS temporary layer     | Agent changes don't modify original files       |
+| 2. Security isolation   | Landlock + Linux namespaces   | Agent cannot freely access the host             |
+| 3. Review engine        | Diff + approval interface     | Developer reviews changes before applying       |
+| 4. CLI integration      | Rust command-line application | Developer can launch commands through ShadowCLI |
+
+### The first milestone
+
+The initial version should support a workflow like this:
+
+```
+shadow run -- ./agent-task.sh
+```
+
+ShadowCLI should:
+
+1. Create a temporary sandbox.
+2. Mount the project into an isolated filesystem.
+3. Execute the requested command inside the sandbox.
+4. Capture all file modifications.
+5. Show a readable diff.
+6. Ask the developer to approve or reject changes.
+7. Apply approved changes to the original project.
+8. Clean up the temporary sandbox.
+
+The most important requirement: If the agent deletes `.env`, modifies Git files, or installs packages inside the sandbox, the original project must remain unchanged until approval.
+
+## 2. Important technical corrections
+
+Before implementing, make sure your AI coding assistant understands these points:
+
+- OverlayFS: Mounting usually requires privileges or a properly configured user namespace. Detect unsupported environments and fail safely.
+- Landlock: Restrict filesystem access using explicit allowlists. Do not assume it automatically protects every sensitive file.
+- Namespaces: Isolate mount, PID, and network namespaces where supported.
+- seccomp: Use a carefully tested syscall allowlist or deny policy. Blocking a few dangerous syscalls alone does not make a sandbox secure.
+- Review engine: Never blindly copy the entire OverlayFS upper directory into the original project. Handle deletions, symlinks, path traversal, and conflicting changes safely.
+- Security testing: A successful normal execution is not enough. You need tests that actively attempt to escape the sandbox.
+
+## 3. Ready-to-use master prompt for your coding AI
+
+This prompt is designed to make your AI inspect your existing repository first, then implement ShadowCLI incrementally without breaking the architecture.
+
+# ShadowCLI — Phase 1 Implementation & Security Engineering
+
+You are a senior Rust systems engineer, Linux security engineer, and open-source software architect.
+
+Your task is to inspect my existing repository and implement the first working version of **ShadowCLI**, an open-source, zero-trust execution sandbox for AI coding agents.
+
+## Project Vision
+
+ShadowCLI intercepts commands executed by AI coding agents, runs them inside an isolated environment, captures all filesystem changes, and allows developers to review and selectively approve those changes before they reach the original project.
+
+The goal is to provide developers with a secure and lightweight alternative to giving autonomous AI agents unrestricted access to their host operating system.
+
+## 1. Mandatory Initial Repository Audit
+
+Before writing or modifying any code:
+
+1. Inspect the complete existing repository structure.
+2. Read the existing README, Cargo.toml files, source code, configuration, tests, and documentation.
+3. Identify the current implementation status.
+4. Identify existing functionality that can be reused.
+5. Detect architectural problems, incomplete implementations, security vulnerabilities, and technical debt.
+6. Check the installed Rust version, available dependencies, and supported Linux environment.
+7. Identify whether the project already contains a CLI, sandbox engine, filesystem abstraction, or security policy system.
+
+Provide a concise audit report containing:
+
+- Existing architecture
+- Completed functionality
+- Missing functionality
+- Critical security issues
+- Recommended implementation sequence
+
+Do not recreate existing functionality unnecessarily.
+
+## 2. Technical Stack
+
+Use the following technologies:
+
+- Language: Rust
+- CLI: Clap
+- Async runtime: Tokio only where required
+- Linux isolation: Namespaces
+- Filesystem restrictions: Landlock
+- Filesystem overlay: OverlayFS
+- Process execution: std::process or Tokio process management
+- Security policies: TOML configuration
+- Diff generation: Git-compatible diff output
+- Logging: tracing
+- Testing: Rust unit tests, integration tests, and security tests
+- CI/CD: GitHub Actions
+- License: Apache-2.0
+
+Use stable Rust and actively maintained dependencies.
+
+Prefer a minimal dependency footprint.
+
+## 3. Initial CLI Interface
+
+Implement the following commands:
+
+```
+shadow --help
+
+shadow run -- ./agent-task.sh
+
+shadow run --allow-network -- npm test
+
+shadow diff
+
+shadow review
+
+shadow apply
+
+shadow discard
+
+shadow status
+
+shadow doctor
+```
+
+The exact command structure may be adjusted to match the existing repository, but preserve a simple and intuitive developer experience.
+
+## 4. Phase 1 — Filesystem Isolation
+
+Implement a filesystem isolation engine.
+
+Requirements:
+
+- Accept an existing project directory.
+- Create a unique temporary sandbox session.
+- Preserve the original project as the read-only base.
+- Create an isolated writable filesystem layer.
+- Capture new files, modifications, and deletions.
+- Prevent sandboxed commands from modifying the original project.
+- Store session metadata and filesystem changes.
+- Support cleanup of temporary sessions.
+- Detect whether OverlayFS is supported and available.
+- Handle mount failures safely.
+
+The implementation must never silently fall back to executing commands directly against the host filesystem.
+
+If OverlayFS is unavailable, report the limitation and provide a safe alternative or fail closed.
+
+## 5. Phase 2 — Linux Security Isolation
+
+Implement defense-in-depth security.
+
+### Namespace isolation
+
+Use Linux namespaces where supported:
+
+- Mount namespace
+- User namespace
+- PID namespace
+- Network namespace
+- IPC namespace
+
+Use unprivileged execution wherever possible.
+
+Do not require unrestricted root privileges.
+
+### Landlock
+
+Implement filesystem access restrictions.
+
+The sandbox should:
+
+- Access only explicitly permitted project and runtime directories.
+- Prevent access to SSH keys, credentials, unrelated projects, and sensitive host directories.
+- Restrict filesystem writes to the isolated writable layer.
+- Handle symlinks and path traversal safely.
+- Apply restrictions before executing untrusted commands.
+
+### seccomp
+
+Implement a carefully designed syscall restriction policy.
+
+Requirements:
+
+- Default-deny or carefully restricted syscall policy where practical.
+- Explicitly document permitted syscalls.
+- Prevent dangerous privilege escalation paths.
+- Handle architecture-specific syscall differences.
+- Include a configurable security policy.
+
+Do not claim that seccomp alone provides complete sandbox security.
+
+## 6. Phase 3 — Command Execution Engine
+
+Implement a secure process execution engine.
+
+Requirements:
+
+- Execute commands without shell interpolation by default.
+- Support explicit shell execution when requested.
+- Capture stdout and stderr.
+- Track process exit codes.
+- Handle process termination and timeouts.
+- Prevent unauthorized child processes from escaping isolation.
+- Support environment variable filtering.
+- Prevent automatic exposure of host credentials.
+- Support configurable network access.
+- Record execution metadata.
+
+The engine must not execute commands directly on the host when sandbox initialization fails.
+
+## 7. Phase 4 — Shadow Diff Engine
+
+After execution, generate a detailed report of all filesystem changes.
+
+The report should include:
+
+- Added files
+- Modified files
+- Deleted files
+- File permissions changes
+- Symlink changes
+- Binary file changes
+- Total changed files
+- Execution status
+
+Provide readable terminal output and Git-compatible unified diffs.
+
+Example:
+
+```
+ShadowCLI Session: 01JXYZ
+
+Files changed: 4
+
+M src/main.rs
+A src/security.rs
+D old_config.json
+A tests/security_test.rs
+
+Review changes? [y/N]
+```
+
+Do not expose sensitive file contents in logs or terminal output unnecessarily.
+
+## 8. Phase 5 — Developer Review Gate
+
+Implement an interactive review interface.
+
+Requirements:
+
+- Review individual file changes.
+- Approve selected changes.
+- Reject selected changes.
+- Approve all changes.
+- Discard the entire session.
+- Display the exact destination of each approved change.
+- Detect conflicts if the original project changes after sandbox execution.
+- Prevent overwriting unrelated host files.
+- Safely handle file permissions and symlinks.
+
+The developer must explicitly approve changes before they are applied to the original project.
+
+Use a safe, transactional application process where practical.
+
+If applying changes fails, report the exact failure and preserve enough session data for recovery.
+
+## 9. Phase 6 — Security Testing
+
+Create automated tests covering:
+
+### Filesystem protection
+
+- Modify an existing project file.
+- Create a new file.
+- Delete a file.
+- Attempt to modify files outside the project.
+- Attempt to read SSH credentials.
+- Attempt symlink-based path traversal.
+- Attempt to overwrite protected files.
+
+### Process isolation
+
+- Attempt to access host processes.
+- Attempt unauthorized network access.
+- Attempt privilege escalation.
+- Attempt to access restricted directories.
+- Attempt to execute dangerous system operations.
+
+### Review engine
+
+- Approve a modification.
+- Reject a modification.
+- Approve selected files.
+- Detect conflicts.
+- Handle interrupted execution.
+- Recover from failed change application.
+
+Tests must verify that rejected changes never modify the original project.
+
+Do not run destructive security tests against the actual host operating system. Use disposable test environments.
+
+## 10. Phase 7 — Documentation
+
+Update the README with:
+
+- Project overview
+- Installation instructions
+- Supported Linux distributions
+- Dependencies
+- Architecture diagram
+- Security model
+- Threat model
+- CLI usage examples
+- Limitations
+- Development setup
+- Testing instructions
+- Roadmap
+- Contribution guidelines
+
+Clearly document which security guarantees are implemented and which remain experimental.
+
+## 11. Engineering Standards
+
+Follow these mandatory standards:
+
+- Production-quality Rust code.
+- Clear module separation.
+- Strong error handling.
+- No unnecessary unwrap() or expect() in security-critical code.
+- No hardcoded host paths.
+- No silent security fallbacks.
+- No fake implementations or placeholder security controls.
+- No misleading security claims.
+- No breaking changes without explanation.
+- No unnecessary dependencies.
+- All security-sensitive operations must be auditable.
+- Every important feature must include tests.
+
+## 12. Execution Workflow
+
+Work incrementally.
+
+First, complete the repository audit.
+
+Then implement:
+
+1. CLI skeleton
+2. Session management
+3. Filesystem isolation
+4. Command execution
+5. Linux security restrictions
+6. Diff generation
+7. Review and approval
+8. Security tests
+9. Documentation
+
+After each phase:
+
+- Explain what was implemented.
+- List modified and created files.
+- Run relevant tests.
+- Report test results.
+- Identify remaining security limitations.
+- Wait for my approval before moving to the next major phase.
+
+## Final Objective
+
+Deliver a working, testable, open-source ShadowCLI MVP that allows developers to execute AI agent commands inside a restricted Linux sandbox, inspect their filesystem changes, and safely approve or discard those changes.
+
+Begin by auditing my existing repository. Do not start coding until you have identified the current architecture and proposed the implementation plan.
+
+## 4. My advice for your first development session
+
+Don't ask your AI to build the entire project in one shot.
+
+Start with the repository audit, then build a working filesystem-isolation demo that proves this:
+
+```
+Original project:
+    main.rs → ORIGINAL
+
+AI agent executes:
+    echo "MODIFIED" > main.rs
+
+ShadowCLI:
+    main.rs → ORIGINAL
+    Sandbox:
+        main.rs → MODIFIED
+
+Developer rejects:
+    main.rs → ORIGINAL
+
+Developer approves:
+    main.rs → MODIFIED
+```
+
+Once this works reliably, add Landlock, namespaces, seccomp, and the review engine in stages.
+
+This first proof of concept is the foundation of ShadowCLI. If you get the isolation and approval model right, the rest of the product becomes much easier to build safely.
