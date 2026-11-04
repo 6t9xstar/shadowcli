@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "linux"))]
 use anyhow::bail;
 use anyhow::Result;
+#[cfg(target_os = "linux")]
 use shadow_core::ShadowPolicy;
 #[cfg(target_os = "linux")]
 use shadow_sandbox::linux::{

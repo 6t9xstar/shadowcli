@@ -24,7 +24,7 @@ call_mcp() {
     echo "$request" | "$SHADOW" mcp 2>/dev/null | grep '"jsonrpc"' | head -n 1
 }
 
-echo "[1/8] Testing MCP Initialization & Protocol Negotiation..."
+echo "[1/9] Testing MCP Initialization & Protocol Negotiation..."
 INIT_REQ='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"claude-code","version":"1.0.0"}}}'
 INIT_RESP=$(call_mcp "$INIT_REQ")
 
@@ -36,7 +36,7 @@ else
     exit 1
 fi
 
-echo "[2/8] Testing MCP Tool Discovery (tools/list)..."
+echo "[2/9] Testing MCP Tool Discovery (tools/list)..."
 LIST_REQ='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 LIST_RESP=$(call_mcp "$LIST_REQ")
 
@@ -55,7 +55,7 @@ if echo "$LIST_RESP" | grep -q '"name":"shadow_apply"'; then
 fi
 echo "  ✔ Passed: Tools declared (shadow_run, shadow_diff, shadow_discard, shadow_status). shadow_apply is correctly excluded from MCP tools."
 
-echo "[3/8] Testing Sandboxed Execution via shadow_run (Zero Host Mutation)..."
+echo "[3/9] Testing Sandboxed Execution via shadow_run (Zero Host Mutation)..."
 echo "base_content" > existing.txt
 RUN_REQ='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"shadow_run","arguments":{"command":"echo \"new_code\" > staged.rs"}}}'
 RUN_RESP=$(call_mcp "$RUN_REQ")
@@ -81,7 +81,7 @@ if [ -f "$TEST_DIR/staged.rs" ]; then
 fi
 echo "  ✔ Passed: Command executed inside sandbox; host remained completely unchanged (zero-mutation staging)."
 
-echo "[4/8] Testing Diff Review & Secret Redaction via shadow_diff..."
+echo "[4/9] Testing Diff Review & Secret Redaction via shadow_diff..."
 # 1. Check normal diff
 DIFF_REQ="{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"shadow_diff\",\"arguments\":{\"session_id\":\"$SESSION_ID\"}}}"
 DIFF_RESP=$(call_mcp "$DIFF_REQ")
@@ -114,7 +114,7 @@ else
     exit 1
 fi
 
-echo "[5/8] Testing Agent Approval Prevention & Cryptographic Review Hash Binding..."
+echo "[5/9] Testing Agent Approval Prevention & Cryptographic Review Hash Binding..."
 # 1. Verify agent cannot self-approve or apply changes via MCP tool call
 APPLY_MCP_REQ="{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"shadow_apply\",\"arguments\":{\"session_id\":\"$SESSION_ID\",\"confirm\":true}}}"
 APPLY_MCP_RESP=$(call_mcp "$APPLY_MCP_REQ")
@@ -212,7 +212,7 @@ else
     exit 1
 fi
 
-echo "[6/8] Testing Security Confinement via MCP Tool Call..."
+echo "[6/9] Testing Security Confinement via MCP Tool Call..."
 # 1. Canary credential access inside sandbox
 CREDS_REQ='{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"shadow_run","arguments":{"command":"cat ~/.ssh/id_rsa"}}}'
 CREDS_RESP=$(call_mcp "$CREDS_REQ")
@@ -246,7 +246,7 @@ else
     exit 1
 fi
 
-echo "[7/8] Testing Session Discard via shadow_discard..."
+echo "[7/9] Testing Session Discard via shadow_discard..."
 DISCARD_RUN_REQ='{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"shadow_run","arguments":{"command":"echo \"discard_me\" > discard.txt"}}}'
 DISCARD_RUN_RESP=$(call_mcp "$DISCARD_RUN_REQ")
 DISCARD_SESSION=$(echo "$DISCARD_RUN_RESP" | grep -oE "Session ID: [0-9A-HJKMNP-TV-Z]{26}" | awk '{print $3}')
@@ -266,7 +266,7 @@ if [ -f "$TEST_DIR/discard.txt" ]; then
     exit 1
 fi
 
-echo "[8/8] Testing Application-Layer Bypass Boundaries & Limitations..."
+echo "[8/9] Testing Application-Layer Bypass Boundaries & Limitations..."
 # Bypass Demonstration 1: Unconfined Native Shell Execution
 # If Claude Code executes a native shell outside ShadowCLI, it runs with host privileges.
 echo "unconfined_write" > unconfined_host.txt
@@ -298,6 +298,69 @@ else
     echo "  ℹ Note: Host could not reach api.anthropic.com (offline or DNS restricted), but network namespace boundary holds."
 fi
 
+echo "[9/9] Testing Merge-Safe Claude Setup Wizard (.mcp.json & settings.json)..."
+SETUP_DIR="$TEST_DIR/setup_merge_test"
+mkdir -p "$SETUP_DIR/.claude"
+
+# Pre-populate existing .mcp.json with an existing 3rd-party server
+cat <<'EOF' > "$SETUP_DIR/.mcp.json"
+{
+  "mcpServers": {
+    "sqlite": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "test.db"]
+    }
+  },
+  "customSetting": 42
+}
+EOF
+
+# Pre-populate existing .claude/settings.json with existing rules and model
+cat <<'EOF' > "$SETUP_DIR/.claude/settings.json"
+{
+  "permissions": {
+    "allow": ["Read(*)"],
+    "deny": ["WebSearch(*)"]
+  },
+  "model": "claude-3-7-sonnet-20250219"
+}
+EOF
+
+# Run setup wizard with --write in the target directory
+(cd "$SETUP_DIR" && "$SHADOW" claude-setup --write >/dev/null)
+
+# Verify .mcp.json: preserved sqlite, added shadowcli, preserved customSetting
+if grep -q "sqlite" "$SETUP_DIR/.mcp.json" && grep -q "shadowcli" "$SETUP_DIR/.mcp.json" && grep -q "customSetting" "$SETUP_DIR/.mcp.json"; then
+    echo "  ✔ Passed: .mcp.json safely merged 'shadowcli' while preserving existing servers and root fields."
+else
+    echo "FAIL: .mcp.json clobbered existing servers or settings!"
+    exit 1
+fi
+
+# Verify .mcp.json backup was created
+if ls "$SETUP_DIR/.mcp.json.bak"* >/dev/null 2>&1; then
+    echo "  ✔ Passed: Created backup of original .mcp.json before merging."
+else
+    echo "FAIL: Backup of .mcp.json was not created!"
+    exit 1
+fi
+
+# Verify .claude/settings.json: preserved Read(*), preserved WebSearch(*), added Bash(*), preserved model
+if grep -q "Read(\*)" "$SETUP_DIR/.claude/settings.json" && grep -q "Bash(\*)" "$SETUP_DIR/.claude/settings.json" && grep -q "claude-3-7-sonnet" "$SETUP_DIR/.claude/settings.json"; then
+    echo "  ✔ Passed: settings.json appended 'Bash(*)' while preserving existing allow/deny rules and settings."
+else
+    echo "FAIL: settings.json clobbered existing permissions or model settings!"
+    exit 1
+fi
+
+# Verify .claude/settings.json backup was created
+if ls "$SETUP_DIR/.claude/settings.json.bak"* >/dev/null 2>&1; then
+    echo "  ✔ Passed: Created backup of original settings.json before merging."
+else
+    echo "FAIL: Backup of settings.json was not created!"
+    exit 1
+fi
+
 echo "=========================================================="
-echo "   ALL 8 CLAUDE CODE INTEGRATION TESTS PASSED CLEANLY     "
+echo "   ALL 9 CLAUDE CODE INTEGRATION TESTS PASSED CLEANLY     "
 echo "=========================================================="

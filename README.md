@@ -6,7 +6,7 @@
 
 # 👻 ShadowCLI
 
-### *The Zero-Trust Execution Layer for AI Coding Agents*
+### *Kernel-Enforced Execution Sandbox for AI Coding Agents*
 
 [![CI](https://github.com/6t9xstar/shadowcli/actions/workflows/ci.yml/badge.svg)](https://github.com/6t9xstar/shadowcli/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org)
@@ -30,13 +30,16 @@
 
 </div>
 
+> [!IMPORTANT]
+> **Operational Boundary Notice:** ShadowCLI protects commands routed through its execution interface (`shadow run`, `shadow mcp`). Native file editing and other operations outside that interface (such as Claude Code's native `Edit` and `Write` tools) are not automatically contained.
+
 ## 📌 What is ShadowCLI?
 
 Autonomous AI coding agents (**Claude Code**, **OpenHands**, **Codex**, **Aider**, and custom LLM runners) execute bash commands, compile code, and mutate files. 
 
 Giving autonomous agents unrestricted access to your developer machine is inherently dangerous: prompt injection, hallucinations, or rogue scripts can silently leak your `~/.ssh` keys, wipe `.git` history, overwrite `.env` secrets, or install backdoor dependencies.
 
-**ShadowCLI** intercepts agent commands and runs them inside an **unprivileged, defense-in-depth Linux sandbox**. Every file modification is quarantined in an ephemeral copy-on-write layer (OverlayFS), secrets are automatically redacted, and changes are **never applied to your real project** until you explicitly inspect and approve them.
+**ShadowCLI** intercepts agent commands and runs them inside an **unprivileged, defense-in-depth Linux sandbox**. For commands routed through ShadowCLI, every file modification is staged in an ephemeral copy-on-write layer (OverlayFS / CopyFS), secrets are automatically redacted, and changes are **never applied to your real project** until you explicitly inspect and approve them in your terminal via a cryptographic review hash.
 
 ```
        AI Agent / LLM
@@ -76,11 +79,11 @@ Giving autonomous agents unrestricted access to your developer machine is inhere
 | Feature | Direct Host Execution | Docker / Dev Containers | **ShadowCLI** |
 | :--- | :---: | :---: | :---: |
 | **Setup Overhead** | None | High (huge image builds, daemon) | **Instant (single unprivileged binary)** |
-| **Host Protection** | ❌ None (direct root/user mutation) | ⚠️ Partial (volume mounts bypass isolation) | **✅ Isolated CoW Delta Layer (OverlayFS / CopyFS)** |
+| **Host Protection** | ❌ None (direct root/user mutation) | ⚠️ Partial (volume mounts bypass isolation) | **✅ Staged CoW Delta Layer for routed commands** |
 | **Root Required** | N/A | ❌ Yes (Docker daemon / sudo) | **✅ No (pure unprivileged userns)** |
-| **Secret Protection** | ❌ None (`~/.ssh`, `~/.aws` exposed) | ⚠️ Requires manual volume exclusion | **✅ Auto-masked (`$HOME` tmpfs + LSM)** |
-| **Network Egress** | ❌ Open by default | ⚠️ Open by default | **✅ Blocked by default (opt-in)** |
-| **Interactive Review** | ❌ None | ❌ None (writes live to mounted dir) | **✅ Colored diff + per-file approval** |
+| **Secret Protection** | ❌ None (`~/.ssh`, `~/.aws` exposed) | ⚠️ Requires manual volume exclusion | **✅ Auto-masked in sandbox (`$HOME` tmpfs + LSM)** |
+| **Network Egress** | ❌ Open by default | ⚠️ Open by default | **✅ Blocked in sandbox by default (opt-in)** |
+| **Interactive Review** | ❌ None | ❌ None (writes live to mounted dir) | **✅ Colored diff + review hash approval** |
 | **Atomic Rollback** | ❌ Manual `git checkout` (misses untracked) | ❌ Complex volume snapshots | **✅ Built-in journaled rollback** |
 | **Fail-Closed Guarantee** | ❌ No | ❌ No | **✅ Yes (exits 125 on probe failure)** |
 
@@ -245,7 +248,7 @@ ShadowCLI enforces a 7-layer defense-in-depth security model:
 ├────────────────────────────────────────────────────────────────────────┤
 │                      LAYER 4: NETWORK NAMESPACE                        │
 │  CLONE_NEWNET isolates networking. Loopback down, raw sockets denied.  │
-│  Zero outbound telemetry or data exfiltration without --allow-network. │
+│  Zero outbound telemetry from sandboxed commands without --allow-network.   │
 ├────────────────────────────────────────────────────────────────────────┤
 │                       LAYER 5: LANDLOCK LSM                            │
 │  Kernel-enforced rule set (ABI v1-v7). Read-only access to system bins │
@@ -257,7 +260,7 @@ ShadowCLI enforces a 7-layer defense-in-depth security model:
 ├────────────────────────────────────────────────────────────────────────┤
 │                  LAYER 7: OVERLAYFS QUARANTINE                         │
 │  CoW upperdir captures delta writes. Character devices (0:0) track     │
-│  deletions. Host filesystem is never mutated during execution.         │
+│  deletions. Host filesystem is never mutated during command execution. │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -291,18 +294,18 @@ ShadowCLI includes a rigorous automated adversarial test harness ([`tests/securi
 
 ## 🤖 Supported AI Coding Agents
 
-ShadowCLI operates as an unprivileged, universal execution boundary. Any tool, script, or binary that spawns terminal commands or manipulates file trees runs seamlessly inside ShadowCLI.
+ShadowCLI provides an unprivileged, kernel-enforced staging sandbox for any tool, script, or AI agent workflow routed through its command runner (`shadow run`) or MCP server (`shadow mcp`).
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                   UNIVERSAL AI AGENT EXECUTION LAYER                   │
+│                   AI AGENT COMMAND EXECUTION LAYER                     │
 │                                                                        │
 │   Claude Code • Cursor • Windsurf • Aider • OpenHands • Cline • Devin  │
 │   Google Antigravity • Gemini CLI • GitHub Copilot • Roo Code • Jules   │
 │                                  │                                     │
 │                                  ▼                                     │
 │                     ┌──────────────────────────┐                       │
-│                     │       shadow run         │                       │
+│                     │ shadow run / shadow mcp  │                       │
 │                     └────────────┬─────────────┘                       │
 │                                  ▼                                     │
 │            [ Quarantined Sandbox + Ephemeral OverlayFS ]                │
@@ -311,15 +314,26 @@ ShadowCLI operates as an unprivileged, universal execution boundary. Any tool, s
 
 ---
 
-### 🏆 Top 5 Best AI Coding Agents: Quickstart Integration
+### 🏆 AI Coding Agents: Quickstart Integration
 
-#### 1. Claude Code (Anthropic)
-Anthropic's autonomous terminal coding agent executes system shell commands to inspect files, edit code, and run tests.
+#### 1. Claude Code (Anthropic — via MCP)
+ShadowCLI integrates with Claude Code via the Model Context Protocol (MCP), providing a zero-trust staging sandbox for commands routed through it:
 ```bash
-# Run Claude Code in headless high-speed mode safely:
-shadow run --allow-network -- claude --dangerously-skip-permissions
+# Configure your project with merge-safe configuration:
+shadow claude-setup --write
 ```
-> **Why use ShadowCLI:** Claude Code can run with `--dangerously-skip-permissions` at full machine speed without risking your host machine. Your `~/.ssh/id_rsa`, `~/.aws/credentials`, and host `.env` files are masked, and changes are kept in quarantine until you run `shadow review`.
+This merges `.mcp.json` to expose `shadow_run`, `shadow_diff`, `shadow_discard`, and `shadow_status`, and configures `.claude/settings.json` with `"deny": ["Bash(*)"]`.
+
+```bash
+# Developer approval workflow:
+# 1. Claude Code calls shadow_run (host files remain unchanged)
+# 2. Claude Code inspects diff via shadow_diff and displays cryptographic review hash
+# 3. Developer applies reviewed changes in terminal:
+shadow apply --session <SESSION_ID> --review-hash <HASH> --all --yes
+```
+
+> [!WARNING]
+> **Boundary Notice:** Denying `Bash(*)` instructs Claude Code to route shell executions through `shadow_run`. However, native Claude Code runtime file tools (`Edit`, `Write`) execute directly via Node.js on the host and bypass ShadowCLI staging. To enforce complete quarantine, instruct the model to execute file modifications exclusively via `shadow_run`. See [Claude Code Integration Guide](docs/CLAUDE_CODE_INTEGRATION.md).
 
 #### 2. Cursor & Windsurf (Agentic IDEs)
 Next-generation AI editors featuring agentic modes that generate and execute shell tasks, builds, and test commands.

@@ -247,14 +247,14 @@ impl SessionStore {
         let paths = SessionPaths::new(&self.base_dir, id);
         if paths.root.exists() {
             // Check if the session is currently locked by an active apply/rollback operation
-            let lock_path = paths.root.join("apply.lock");
+            let _lock_path = paths.root.join("apply.lock");
             #[cfg(unix)]
-            if lock_path.exists() {
+            if _lock_path.exists() {
                 use std::os::unix::io::AsRawFd;
                 if let Ok(file) = fs::OpenOptions::new()
                     .read(true)
                     .write(true)
-                    .open(&lock_path)
+                    .open(&_lock_path)
                 {
                     let fd = file.as_raw_fd();
                     let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
@@ -269,14 +269,29 @@ impl SessionStore {
                 }
             }
 
-            // Under overlayfs, workdir may have mode 0000 directories, chmod before removal on unix
+            // Under overlayfs, workdir may have mode 0000 directories.
+            // Recursively fix permissions across the session directory before removal.
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&paths.work_dir, fs::Permissions::from_mode(0o755));
+                fix_permissions_recursive(&paths.root);
             }
             fs::remove_dir_all(&paths.root)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn fix_permissions_recursive(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.is_dir() {
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
+            if let Ok(entries) = fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    fix_permissions_recursive(&entry.path());
+                }
+            }
+        }
     }
 }

@@ -4,6 +4,7 @@ use shadow_core::{
     classify_changes, ChangeType, FileChange, ProjectManifest, ReviewState, SessionState,
     SessionStore,
 };
+#[allow(unused_imports)]
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -90,10 +91,10 @@ fn validate_symlink_target(project_root: &Path, rel_link_path: &Path, target: &P
         .canonicalize()
         .unwrap_or_else(|_| project_root.to_path_buf());
 
-    let link_parent = project_root
+    let link_parent = canonical_proj
         .join(rel_link_path)
         .parent()
-        .unwrap_or(project_root)
+        .unwrap_or(&canonical_proj)
         .to_path_buf();
 
     let full_target = if target.is_absolute() {
@@ -457,7 +458,7 @@ fn apply_symlink_descriptor_relative(
 fn apply_symlink_descriptor_relative(
     project_root: &Path,
     rel_path: &Path,
-    target: &Path,
+    _target: &Path,
 ) -> Result<()> {
     let dest = project_root.join(rel_path);
     if let Some(parent) = dest.parent() {
@@ -471,6 +472,7 @@ fn apply_symlink_descriptor_relative(
 
 /// Mutual exclusion lock preventing concurrent apply/rollback operations on the same session.
 struct ApplyLock {
+    #[allow(dead_code)]
     lock_path: PathBuf,
     #[cfg(unix)]
     lock_fd: Option<std::os::fd::RawFd>,
@@ -719,6 +721,7 @@ pub fn execute(
                     fs::create_dir_all(parent)?;
                 }
                 if m.file_type().is_symlink() {
+                    #[allow(unused_variables)]
                     if let Ok(link_target) = fs::read_link(&dest) {
                         #[cfg(unix)]
                         {
@@ -887,6 +890,7 @@ fn handle_rollback_internal(paths: &shadow_core::SessionPaths, project_root: &Pa
             let backup_file = paths.backup_dir.join(&rel_path);
             let target_file = project_root.join(&rel_path);
 
+            #[allow(unused_variables)]
             if let Ok(target) = fs::read_link(&backup_file) {
                 let _ = fs::remove_file(&target_file);
                 #[cfg(unix)]
@@ -907,6 +911,7 @@ fn handle_rollback_internal(paths: &shadow_core::SessionPaths, project_root: &Pa
             let backup_file = paths.backup_dir.join(&rel_path);
             let target_file = project_root.join(&rel_path);
 
+            #[allow(unused_variables)]
             if let Ok(target) = fs::read_link(&backup_file) {
                 let _ = fs::remove_file(&target_file);
                 #[cfg(unix)]

@@ -29,9 +29,11 @@ impl DoctorReport {
     }
 }
 
+#[allow(unused_variables)]
 pub fn run_doctor(probe_path: &Path) -> DoctorReport {
     let mut probes = Vec::new();
     let is_linux = cfg!(target_os = "linux");
+    #[allow(unused_mut)]
     let mut is_wsl = false;
 
     if !is_linux {

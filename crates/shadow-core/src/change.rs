@@ -64,11 +64,11 @@ pub fn is_binary_content(sample: &[u8]) -> bool {
 }
 
 /// Detects if an upper directory file is an OverlayFS whiteout (character device 0:0 on Linux)
-pub fn is_overlay_whiteout(path: &Path) -> bool {
+pub fn is_overlay_whiteout(_path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
-        if let Ok(meta) = fs::symlink_metadata(path) {
+        if let Ok(meta) = fs::symlink_metadata(_path) {
             if meta.file_type().is_char_device() {
                 use std::os::unix::fs::MetadataExt;
                 return meta.rdev() == 0;

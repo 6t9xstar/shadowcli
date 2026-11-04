@@ -34,9 +34,16 @@ else
     SHADOW_BIN="$REPO_ROOT/target/debug/shadow"
 fi
 
-DEMO_DIR="/tmp/shadow_claude_demo_$$"
+# Create an unpredictable, unshared temporary directory with restrictive permissions
+DEMO_DIR=$(mktemp -d /tmp/shadow_claude_demo_XXXXXX)
+chmod 700 "$DEMO_DIR"
 
-# Safety validation: strictly enforce that DEMO_DIR is an isolated temporary directory
+# Strict safety validation: verify isolated temporary directory properties
+if [ -L "$DEMO_DIR" ]; then
+    echo "ERROR: Refusing to execute: workspace is a symlink ($DEMO_DIR)" >&2
+    exit 1
+fi
+
 case "$DEMO_DIR" in
     /tmp/shadow_claude_demo_*) ;;
     *)
@@ -46,7 +53,7 @@ case "$DEMO_DIR" in
 esac
 
 cleanup() {
-    if [[ -n "${DEMO_DIR:-}" && "$DEMO_DIR" == /tmp/shadow_claude_demo_* && -d "$DEMO_DIR" ]]; then
+    if [[ -n "${DEMO_DIR:-}" && "$DEMO_DIR" == /tmp/shadow_claude_demo_* && -d "$DEMO_DIR" && ! -L "$DEMO_DIR" ]]; then
         rm -rf "$DEMO_DIR"
     fi
 }
