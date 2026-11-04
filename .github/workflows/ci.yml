@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 jobs:
   check-and-test:
@@ -32,3 +32,17 @@ jobs:
         run: cargo test --workspace -- --nocapture
         env:
           SHADOW_REQUIRE_SANDBOX: "1"
+
+      - name: Build shadow binary
+        run: cargo build --verbose
+
+      - name: Run Adversarial Security Suite
+        run: |
+          chmod +x tests/security/*.sh
+          bash tests/security/test_adversarial_suite.sh
+
+      - name: Run Transactional Apply & Rollback Tests
+        run: bash tests/security/test_apply_rollback.sh
+
+      - name: Run M1 E2E Proof of Concept
+        run: bash tests/m1_e2e_demo.sh
