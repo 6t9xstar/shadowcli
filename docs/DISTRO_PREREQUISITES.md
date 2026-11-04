@@ -128,12 +128,18 @@ Arch Linux ships with standard upstream Linux kernels where user namespaces and 
 
 ### WSL2 (Windows Subsystem for Linux)
 
-WSL2 on Ubuntu 22.04 or 24.04 is fully supported.
+WSL2 on Ubuntu 22.04 or 24.04 is supported with important architectural nuances:
 
-**Important Note on Filesystem Types (DrvFS vs Linux ext4)**:
-- Projects located on Windows drives (e.g. `/mnt/c/...`, `/mnt/d/...`) use **DrvFS / 9p**, which does not support unprivileged OverlayFS extended attributes (`trusted.overlay.*` / `user.overlay.*`).
-- **Best Practice**: Place your repositories in the native Linux WSL filesystem (e.g. `~/projects/my-repo` or `/home/<user>/...`).
-- When running on `/mnt/...`, ShadowCLI automatically falls back to **CopyFS** mode.
+**1. Filesystem Types & Backend Selection (DrvFS vs. Native ext4)**:
+- Projects located on Windows drives (e.g. `/mnt/c/...`, `/mnt/d/...`) use **DrvFS / 9p**. The 9p virtual filesystem does not support Linux extended attributes (`trusted.overlay.*` / `user.overlay.*`) required by unprivileged OverlayFS.
+- When running on DrvFS mounts, ShadowCLI automatically detects this capability gap and transitions to **CopyFS** mode (staging modifications into an isolated temporary workspace copy).
+- Native Linux filesystems (`ext4`, `btrfs`, `tmpfs`, such as `~/projects/my-repo` or `/home/<user>/...`) support unprivileged OverlayFS when the host kernel and mount options permit it.
+- **Support is environment-dependent**: OverlayFS is not an unconditional guarantee across all paths. For fastest microsecond CoW branching and minimal memory overhead, clone active repositories into the native Linux WSL filesystem. Both backends are fully covered by the test suite.
+
+**2. AppArmor in WSL2 Kernels**:
+- Standard Microsoft WSL2 kernels (`*-microsoft-standard-WSL2`) initialize Landlock and Seccomp, but typically do not mount the AppArmor `securityfs` interface at boot.
+- Because AppArmor LSM is inactive in default WSL2 kernels, Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns` restriction does not apply in WSL2. ShadowCLI operates unprivileged user namespaces and filesystem isolation directly via Landlock LSM and Seccomp BPF filters.
+- Running `scripts/setup_host_apparmor.sh` on WSL2 detects this inactive state, outputs an informative diagnostic, and exits cleanly (`0`) without failing or modifying system security.
 
 ---
 

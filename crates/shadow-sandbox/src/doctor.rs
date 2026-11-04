@@ -125,7 +125,9 @@ pub fn run_doctor(probe_path: &Path) -> DoctorReport {
         }
 
         // 3b. Debian unprivileged_userns_clone check (if sysctl exists)
-        if let Ok(deb_userns) = std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone") {
+        if let Ok(deb_userns) =
+            std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
+        {
             let val = deb_userns.trim();
             if val == "0" {
                 probes.push(ProbeResult {
@@ -155,7 +157,7 @@ pub fn run_doctor(probe_path: &Path) -> DoctorReport {
                 name: "Ubuntu 24.04 AppArmor Restriction".to_string(),
                 status: ProbeStatus::Warn,
                 message: "kernel.apparmor_restrict_unprivileged_userns is enabled".to_string(),
-                fix: Some("Run: sudo bash scripts/setup_host_apparmor.sh or sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0".to_string()),
+                fix: Some("Install the scoped ShadowCLI AppArmor profile: sudo bash scripts/setup_host_apparmor.sh".to_string()),
             });
         } else {
             probes.push(ProbeResult {

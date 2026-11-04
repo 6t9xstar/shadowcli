@@ -9,10 +9,21 @@ This document defines the formal security objectives, threat model, architectura
 ShadowCLI provides **kernel-enforced containment and transactional review** for shell commands executed during autonomous AI coding sessions.
 
 ### Primary Goals:
-1. **Zero Unreviewed Host Mutations**: Commands executed inside the sandbox stage all filesystem modifications in an ephemeral Copy-on-Write (CoW) layer; the host repository remains strictly untouched until developer review.
+1. **Zero Unreviewed Host Mutations for Routed Commands**: Commands executed through the sandbox stage all filesystem modifications in an ephemeral Copy-on-Write (CoW) layer (OverlayFS / CopyFS); the host repository remains strictly untouched until developer review.
 2. **Cryptographic Binding**: Applied changes are bound to a deterministic, canonical SHA-256 review hash (`--review-hash`), preventing Time-of-Check to Time-of-Use (TOCTOU) modifications.
 3. **Agent Self-Approval Prevention**: AI agents operating via MCP cannot approve, confirm, or apply their own changes; application requires an out-of-band terminal action by the human developer.
 4. **Credential & Host Protection**: Sensitive host directories (`.ssh`, `.aws`, `.gnupg`, `.env`) are masked, protected from unconfirmed edits, and blocked from egress by default.
+
+### Conventional Launcher Exit Codes
+ShadowCLI implements standard launcher exit codes across all commands:
+- **`0–255`**: Passthrough exit code of the sandboxed target command when execution completes.
+- **`124`**: Execution timed out after `--timeout` seconds (process tree terminated by SIGKILL).
+- **`125`**: Preflight capability check failure or probe denial (e.g. kernel < 5.11, userns restricted on host).
+- **`2`**: CLI syntax or argument parsing error (invalid flags or missing parameters).
+- **`1`**: Runtime mount configuration failure, namespace initialization error, or session/apply error.
+
+> [!NOTE]
+> **Exit Code Overlap:** A sandboxed target process may itself return `1`, `2`, `124`, or `125`. If callers or automated harnesses must distinguish whether an exit status originated from ShadowCLI's launcher controls versus the target application, inspect session metadata (`meta.json` or `shadow status --json`).
 
 ---
 

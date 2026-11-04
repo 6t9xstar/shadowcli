@@ -209,7 +209,9 @@ pub fn apply_landlock_restrictions(
                 ruleset = ruleset
                     .add_rule(PathBeneath::new(dev_fd, file_rw))
                     .map_err(|e| {
-                        SandboxError::Landlock(format!("Failed to add Landlock rule for {node}: {e}"))
+                        SandboxError::Landlock(format!(
+                            "Failed to add Landlock rule for {node}: {e}"
+                        ))
                     })?;
             }
         }
@@ -233,7 +235,9 @@ pub fn apply_landlock_restrictions(
             ruleset = ruleset
                 .add_rule(PathBeneath::new(dev_fd, dev_access))
                 .map_err(|e| {
-                    SandboxError::Landlock(format!("Failed to add Landlock read rule for /dev: {e}"))
+                    SandboxError::Landlock(format!(
+                        "Failed to add Landlock read rule for /dev: {e}"
+                    ))
                 })?;
         }
     }

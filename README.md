@@ -87,7 +87,7 @@ Giving autonomous agents unrestricted access to your developer machine is inhere
 | **Network Egress** | ❌ Open by default | ⚠️ Open by default | **✅ Blocked in sandbox by default (opt-in)** |
 | **Interactive Review** | ❌ None | ❌ None (writes live to mounted dir) | **✅ Colored diff + review hash approval** |
 | **Atomic Rollback** | ❌ Manual `git checkout` (misses untracked) | ❌ Complex volume snapshots | **✅ Built-in journaled rollback** |
-| **Fail-Closed Guarantee** | ❌ No | ❌ No | **✅ Yes (exits 125 on probe failure)** |
+| **Fail-Closed Guarantee** | ❌ No | ❌ No | **✅ Yes (fails closed on capability/setup error)** |
 
 ---
 
@@ -109,7 +109,24 @@ shadow doctor
 ```
 Runs preflight probes testing kernel version (≥ 5.11), unprivileged user namespaces, Landlock LSM ABI version, Seccomp BPF support, and filesystem compatibility.
 
-### 3. Run Commands in Isolation
+> [!NOTE]
+> **Filesystem Engine Selection (OverlayFS vs. CopyFS):**
+> - On native Linux filesystems (`ext4`, `btrfs`, `tmpfs`, e.g. `~/projects/...`), ShadowCLI utilizes kernel **OverlayFS** for microsecond CoW branching.
+> - On cross-OS Windows mounts in WSL2 (`/mnt/c/...`, `/mnt/d/...`), DrvFS / 9p does not support OverlayFS extended attributes (`user.overlay.*`). ShadowCLI automatically detects this and falls back safely to **CopyFS** mode.
+> - Support is environment-dependent; for optimal performance and native OverlayFS staging, store active repositories in the native Linux filesystem.
+
+### 3. Exit Codes
+ShadowCLI adheres to conventional launcher exit codes:
+- **`0–255`**: Passthrough exit code of the sandboxed target command.
+- **`124`**: Sandbox execution timeout expired (`--timeout` elapsed; process tree terminated by `SIGKILL`).
+- **`125`**: Sandbox capability probe or preflight failure (e.g. kernel < 5.11, userns restricted, or doctor probe failure).
+- **`2`**: CLI argument parsing or usage syntax error (e.g. invalid flags or missing required arguments).
+- **`1`**: ShadowCLI runtime error (e.g. mount setup failure, session initialization failure, or apply/rollback error).
+
+> [!NOTE]
+> **Exit Code Overlap:** A sandboxed target process may itself return `1`, `2`, `124`, or `125`. When automated harnesses or wrappers need to distinguish whether an exit code originated from the target process versus ShadowCLI's launcher controls, inspect session metadata (`meta.json` or `shadow status --json`).
+
+### 4. Run Commands in Isolation
 ```bash
 # Run any command or agent script in strict quarantine:
 shadow run -- npm test
@@ -294,9 +311,12 @@ ShadowCLI includes a rigorous automated adversarial test harness ([`tests/securi
 
 ---
 
-## 🤖 Supported AI Coding Agents
+## 🤖 Supported AI Agent Integration Patterns
 
-ShadowCLI provides an unprivileged, kernel-enforced staging sandbox for any tool, script, or AI agent workflow routed through its command runner (`shadow run`) or MCP server (`shadow mcp`).
+ShadowCLI provides an unprivileged, kernel-enforced staging sandbox for tools, scripts, and agent workflows routed through its command runner (`shadow run`) or MCP server (`shadow mcp`).
+
+> [!IMPORTANT]
+> **Execution Boundary & Gating Notice:** ShadowCLI is **not** an OS-wide transparent proxy or global background interceptor. Only processes and tool calls explicitly routed through `shadow run` or `shadow mcp` are within its execution boundary. Native editor file writes (such as Claude Code's Node.js `Edit` and `Write` tools), background IDE extensions, and out-of-band agent activity execute directly on the host machine and are not intercepted.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -316,7 +336,7 @@ ShadowCLI provides an unprivileged, kernel-enforced staging sandbox for any tool
 
 ---
 
-### 🏆 AI Coding Agents: Quickstart Integration
+### 🏆 Integration Patterns by Workflow
 
 #### 1. Claude Code (Anthropic — via MCP)
 ShadowCLI integrates with Claude Code via the Model Context Protocol (MCP), providing a zero-trust staging sandbox for commands routed through it:
@@ -344,7 +364,7 @@ Next-generation AI editors featuring agentic modes that generate and execute she
 shadow run --allow-network -- npm run build
 shadow run --allow-network -- pytest tests/
 ```
-> **Why use ShadowCLI:** Prevents LLM hallucinations or prompt-injected packages from writing outside the project root or tampering with system binaries.
+> **Why use ShadowCLI:** Prevents LLM hallucinations or prompt-injected packages from writing outside the project root or tampering with system binaries when terminal commands are wrapped. Note that native editor GUI edits are not intercepted.
 
 #### 3. Aider (Paired AI Programming)
 The popular terminal pair programmer that edits code in local git repositories.
@@ -352,7 +372,7 @@ The popular terminal pair programmer that edits code in local git repositories.
 # Allow Aider to edit and refactor with automated approvals:
 shadow run --allow-network -- aider --yes-always
 ```
-> **Why use ShadowCLI:** Lets Aider experiment freely. Inspect exact git diffs via `shadow diff`, view git diffstat with `shadow diff --stat`, and apply changes transactionally or revert with `shadow apply --rollback`.
+> **Why use ShadowCLI:** Lets Aider experiment freely inside the sandbox. Inspect exact git diffs via `shadow diff`, view git diffstat with `shadow diff --stat`, and apply changes transactionally or revert with `shadow apply --rollback`.
 
 #### 4. OpenHands (Formerly OpenDevin)
 An open-source autonomous development agent platform designed to solve full GitHub issues and build software.
@@ -360,7 +380,7 @@ An open-source autonomous development agent platform designed to solve full GitH
 # Run OpenHands agents locally without Docker overhead:
 shadow run --allow-network -- poetry run python -m openhands.core.main
 ```
-> **Why use ShadowCLI:** Eliminates the heavyweight Docker daemon requirement. Uses native Linux user namespaces and OverlayFS for microsecond startup times and zero-root privileges.
+> **Why use ShadowCLI:** Eliminates the heavyweight Docker daemon requirement when invoking the agent runner inside ShadowCLI's native Linux user namespaces and OverlayFS.
 
 #### 5. Cline & Roo Code / Google Antigravity & Gemini CLI
 Autonomous VS Code extensions and developer CLI agents capable of end-to-end task execution.
@@ -368,19 +388,19 @@ Autonomous VS Code extensions and developer CLI agents capable of end-to-end tas
 # Safely execute agent CLI commands:
 shadow run --allow-network -- gemini-cli "refactor auth service and run tests"
 ```
-> **Why use ShadowCLI:** Strict defense-in-depth confinement via Landlock LSM and Seccomp BPF filters stops dangerous syscalls (`ptrace`, `kexec`, `bpf`) from affecting host processes.
+> **Why use ShadowCLI:** Strict defense-in-depth confinement via Landlock LSM and Seccomp BPF filters stops dangerous syscalls (`ptrace`, `kexec`, `bpf`) from affecting host processes for any command executed through the wrapper.
 
 ---
 
-### 🌐 Complete AI Coding Agent Compatibility Matrix
+### 🌐 Supported AI Agent Integration Patterns & Execution Boundaries
 
-ShadowCLI is thoroughly tested and compatible across the entire AI developer toolchain:
+ShadowCLI supports multiple integration patterns across the AI developer ecosystem when commands are routed through its sandbox:
 
-| Category | Supported AI Coding Agents | Integration Mode |
-| :--- | :--- | :--- |
-| **Autonomous CLI Agents** | **Claude Code**, **Aider**, **OpenHands**, **Devin**, **SWE-agent**, **SWE-smith**, **Goose**, **Amp**, **Factory Droid**, **Kilo Code**, **Qwen Code**, **Qoder**, **Mistral Vibe**, **Pi Coding Agent**, **GPT Engineer**, **Plandex**, **GPT Pilot**, **Mentat**, **Smol Developer**, **Open Interpreter** | Direct CLI wrapper (`shadow run -- <agent>`) |
-| **Agentic IDEs & Editors** | **Cursor**, **Windsurf**, **Cline**, **Roo Code**, **GitHub Copilot**, **Continue**, **Tabby**, **Refact.ai**, **Zencoder**, **Blackbox AI**, **Augment Code**, **Sourcegraph Cody**, **Amazon Q Developer**, **CodeGPT** | Terminal task integration (`shadow run -- <cmd>`) |
-| **Next-Gen Agent Platforms**| **Google Antigravity**, **Gemini CLI**, **Jules**, **OpenCode**, **OpenAI Codex** | Workspace isolation wrapper (`shadow run --project <dir>`) |
+| Category | Agent / Workflow | Integration Pattern | Execution Boundary & Gating |
+| :--- | :--- | :--- | :--- |
+| **Autonomous CLI Agents** | **Claude Code**, **Aider**, **OpenHands**, **Devin**, **SWE-agent**, **SWE-smith**, **Goose**, **Amp**, **Factory Droid**, **Kilo Code**, **Qwen Code**, **Qoder**, **Mistral Vibe**, **Pi Coding Agent**, **GPT Engineer**, **Plandex**, **GPT Pilot**, **Mentat**, **Smol Developer**, **Open Interpreter** | Direct CLI wrapper (`shadow run -- <agent>`) or MCP | Shell commands spawned through the wrapper are quarantined. Out-of-band network calls require `--allow-network`. |
+| **Agentic IDEs & Editors** | **Cursor**, **Windsurf**, **Cline**, **Roo Code**, **GitHub Copilot**, **Continue**, **Tabby**, **Refact.ai**, **Zencoder**, **Blackbox AI**, **Augment Code**, **Sourcegraph Cody**, **Amazon Q Developer**, **CodeGPT** | Terminal task integration (`shadow run -- <cmd>`) | Terminal commands configured to run via `shadow run` are quarantined. Direct editor GUI file modifications bypass ShadowCLI. |
+| **Next-Gen Agent Platforms**| **Google Antigravity**, **Gemini CLI**, **Jules**, **OpenCode**, **OpenAI Codex** | Workspace isolation wrapper (`shadow run --project <dir>`) | Quarantines all actions executed within the invoked process subtree. |
 
 ---
 

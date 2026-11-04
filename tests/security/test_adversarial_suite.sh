@@ -6,6 +6,10 @@ SHADOW="$REPO_ROOT/target/debug/shadow"
 TEST_DIR="/tmp/shadow_adversarial_$$"
 MY_UID=$(id -u)
 
+get_latest_session() {
+    ls -td "/var/tmp/shadowcli-$MY_UID/sessions/"01* 2>/dev/null | head -n 1 | xargs -r basename
+}
+
 cleanup() {
     rm -rf "$TEST_DIR"
 }
@@ -18,7 +22,7 @@ echo "============================================="
 echo "   SHADOWCLI ADVERSARIAL SECURITY SUITE     "
 echo "============================================="
 
-echo "[1/12] Testing Canary Credential Isolation (SSH / AWS / Kube)..."
+echo "[1/18] Testing Canary Credential Isolation (SSH / AWS / Kube)..."
 mkdir -p "$HOME/.ssh" "$HOME/.aws"
 echo "CANARY_SSH_KEY" > "$HOME/.ssh/id_rsa"
 chmod 600 "$HOME/.ssh/id_rsa"
@@ -28,15 +32,19 @@ set +e
 CANARY_EXIT=$?
 set -e
 
+LATEST_SESSION=$(get_latest_session)
+DEF_BACKEND=$(grep -oE '"backend":[[:space:]]*"[^"]+"' "/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/meta.json" 2>/dev/null | awk -F'"' '{print $4}' || echo "unknown")
+echo "  Exercised Default Backend: $DEF_BACKEND"
+
 if [ $CANARY_EXIT -eq 0 ]; then
     echo "FAIL: Sandbox allowed reading host ~/.ssh/id_rsa!"
     exit 1
 fi
 echo "  ✔ Passed: Host credentials unreachable inside sandbox."
 
-echo "[2/12] Testing Host Process Isolation (PID Namespace)..."
+echo "[2/18] Testing Host Process Isolation (PID Namespace)..."
 "$SHADOW" run -- ps aux >/dev/null 2>&1
-LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+LATEST_SESSION=$(get_latest_session)
 STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
 
 # ps aux output should only have header + PID 1 (internal-exec) + PID 2 (ps aux)
@@ -48,9 +56,9 @@ if [ "$PROC_COUNT" -gt 3 ]; then
 fi
 echo "  ✔ Passed: Host processes isolated (only PID 1 & 2 visible in sandbox)."
 
-echo "[3/12] Testing Seccomp BPF Syscall Filter (ptrace deny)..."
+echo "[3/18] Testing Seccomp BPF Syscall Filter (ptrace deny)..."
 "$SHADOW" run -- python3 -c 'import ctypes; libc=ctypes.CDLL(None); res=libc.ptrace(0,0,0,0); print("ptrace_res", res)' >/dev/null 2>&1
-LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+LATEST_SESSION=$(get_latest_session)
 STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
 
 if grep -q "ptrace_res -1" "$STDOUT_LOG"; then
@@ -61,7 +69,7 @@ else
     exit 1
 fi
 
-echo "[4/12] Testing Outbound Network Isolation..."
+echo "[4/18] Testing Outbound Network Isolation..."
 set +e
 "$SHADOW" run -- curl -s --connect-timeout 2 http://1.1.1.1 >/dev/null 2>&1
 NET_EXIT=$?
@@ -73,7 +81,7 @@ if [ $NET_EXIT -eq 0 ]; then
 fi
 echo "  ✔ Passed: Outbound network blocked by default in isolated netns."
 
-echo "[5/12] Testing Immutable Base Filesystem (Landlock + Read-Only Mount)..."
+echo "[5/18] Testing Immutable Base Filesystem (Landlock + Read-Only Mount)..."
 set +e
 "$SHADOW" run -- touch /usr/bin/evil_backdoor >/dev/null 2>&1
 LANDLOCK_EXIT=$?
@@ -85,11 +93,11 @@ if [ $LANDLOCK_EXIT -eq 0 ]; then
 fi
 echo "  ✔ Passed: Base system paths (/usr, /etc, /lib) are strictly immutable."
 
-echo "[6/12] Testing SUID Bit Stripping on Apply..."
+echo "[6/18] Testing SUID Bit Stripping on Apply..."
 rm -rf "$TEST_DIR"/*
 echo "safe" > safe.txt
 "$SHADOW" run -- sh -c 'echo "echo root" > backdoor.sh; chmod 4755 backdoor.sh'
-LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+LATEST_SESSION=$(get_latest_session)
 REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 "$SHADOW" apply --session "$LATEST_SESSION" --review-hash "$REVIEW_HASH" --all --yes
 
@@ -101,7 +109,7 @@ if [ "$HOST_MODE" = "4755" ]; then
 fi
 echo "  ✔ Passed: SUID bit was stripped before host write (mode: $HOST_MODE)."
 
-echo "[7/12] Testing Runaway Process Timeout Enforcement..."
+echo "[7/18] Testing Runaway Process Timeout Enforcement..."
 START_TIME=$(date +%s)
 set +e
 "$SHADOW" run --timeout 2 -- sleep 10
@@ -120,11 +128,11 @@ if [ $ELAPSED -gt 5 ]; then
 fi
 echo "  ✔ Passed: Process killed cleanly after ${ELAPSED}s with exit code 124."
 
-echo "[8/12] Testing Symlink Traversal Escape Prevention..."
+echo "[8/18] Testing Symlink Traversal Escape Prevention..."
 rm -rf "$TEST_DIR"/*
 echo "safe" > safe.txt
 "$SHADOW" run -- ln -s /etc/passwd escape_link
-LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+LATEST_SESSION=$(get_latest_session)
 REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 
 set +e
@@ -142,11 +150,19 @@ if [ -e escape_link ] || [ -L escape_link ]; then
 fi
 echo "  ✔ Passed: Escaping symlink rejected by apply engine."
 
-echo "[9/12] Testing CopyFS Backend Credential Isolation..."
+echo "[9/18] Testing CopyFS Backend Credential Isolation..."
 set +e
 "$SHADOW" run --fs-mode copy -- cat "$HOME/.ssh/id_rsa" >/dev/null 2>&1
 COPY_CREDS_EXIT=$?
 set -e
+
+LATEST_SESSION=$(get_latest_session)
+EXPLICIT_BACKEND=$(grep -oE '"backend":[[:space:]]*"[^"]+"' "/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/meta.json" 2>/dev/null | awk -F'"' '{print $4}' || echo "unknown")
+echo "  Exercised Explicit Backend: $EXPLICIT_BACKEND"
+if [ "$EXPLICIT_BACKEND" != "copy" ]; then
+    echo "FAIL: --fs-mode copy did not select copy backend!"
+    exit 1
+fi
 
 if [ $COPY_CREDS_EXIT -eq 0 ]; then
     echo "FAIL: CopyFS allowed reading host ~/.ssh/id_rsa!"
@@ -154,7 +170,7 @@ if [ $COPY_CREDS_EXIT -eq 0 ]; then
 fi
 echo "  ✔ Passed: CopyFS confines execution inside namespace & masks \$HOME."
 
-echo "[10/12] Testing CopyFS Backend Network Isolation..."
+echo "[10/18] Testing CopyFS Backend Network Isolation..."
 set +e
 "$SHADOW" run --fs-mode copy -- curl -s --connect-timeout 2 http://1.1.1.1 >/dev/null 2>&1
 COPY_NET_EXIT=$?
@@ -166,7 +182,7 @@ if [ $COPY_NET_EXIT -eq 0 ]; then
 fi
 echo "  ✔ Passed: CopyFS executes inside isolated network namespace."
 
-echo "[11/12] Testing Background Orphan Cleanup (PID 1 Kill)..."
+echo "[11/18] Testing Background Orphan Cleanup (PID 1 Kill)..."
 "$SHADOW" run -- sh -c 'sleep 999 & exit 0' >/dev/null 2>&1
 ORPHAN_COUNT=$(pgrep -f "sleep 999" || true)
 if [ -n "$ORPHAN_COUNT" ]; then
@@ -196,7 +212,7 @@ fi
 
 echo "[13/18] Testing Seccomp BPF Nested Namespace Denial (unshare deny)..."
 "$SHADOW" run -- python3 -c 'import ctypes; libc=ctypes.CDLL(None); res=libc.unshare(0x20000); print("unshare_res", res)' >/dev/null 2>&1
-LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+LATEST_SESSION=$(get_latest_session)
 STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
 
 if grep -q "unshare_res -1" "$STDOUT_LOG"; then
@@ -216,7 +232,7 @@ echo "base" > "$TEST_DIR/sub_dir/payload.txt"
 
 # Sandbox run modifying sub_dir/payload.txt
 "$SHADOW" run -- sh -c 'echo "evil" > sub_dir/payload.txt'
-LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+LATEST_SESSION=$(get_latest_session)
 REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 
 # Adversary replaces sub_dir with symlink pointing outside project before apply

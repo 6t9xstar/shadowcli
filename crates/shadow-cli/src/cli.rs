@@ -22,7 +22,18 @@ pub enum FsMode {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Execute a command inside the isolated zero-trust sandbox
+    /// Execute a command inside the isolated zero-trust sandbox.
+    ///
+    /// Conventional exit codes:
+    ///   0-255 : Passthrough exit code of the sandboxed target command
+    ///   124   : Execution timed out (terminated by SIGKILL)
+    ///   125   : Sandbox capability probe or preflight failure
+    ///   2     : CLI syntax or argument parsing error
+    ///   1     : ShadowCLI runtime error (mount failure, session setup, or apply error)
+    ///
+    /// Note: Sandboxed target commands may themselves return 1, 2, 124, or 125.
+    /// Inspect session metadata (`meta.json` or `shadow status --json`) to disambiguate
+    /// launcher errors from target command exit status.
     Run {
         /// Allow outbound network access from within the sandbox
         #[arg(long)]

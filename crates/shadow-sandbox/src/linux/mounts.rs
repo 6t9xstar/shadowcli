@@ -44,10 +44,14 @@ pub fn configure_mount_namespace(
                         // Verify candidate is a physical directory and NOT a symlink (prevent traversal)
                         if let Ok(meta) = std::fs::symlink_metadata(&full) {
                             if meta.is_dir() && !meta.file_type().is_symlink() {
-                                if let Ok(c_path) = CString::new(full.to_str().unwrap_or_default()) {
+                                if let Ok(c_path) = CString::new(full.to_str().unwrap_or_default())
+                                {
                                     let fd = libc::open(
                                         c_path.as_ptr(),
-                                        libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                                        libc::O_PATH
+                                            | libc::O_DIRECTORY
+                                            | libc::O_NOFOLLOW
+                                            | libc::O_CLOEXEC,
                                     );
                                     if fd >= 0 {
                                         cache_fds.push((*rel, fd));
@@ -85,7 +89,8 @@ pub fn configure_mount_namespace(
                     for (rel, fd) in cache_fds {
                         let dest_dir = home_path.join(rel);
                         if std::fs::create_dir_all(&dest_dir).is_ok() {
-                            if let Ok(c_dest) = CString::new(dest_dir.to_str().unwrap_or_default()) {
+                            if let Ok(c_dest) = CString::new(dest_dir.to_str().unwrap_or_default())
+                            {
                                 let proc_src = format!("/proc/self/fd/{fd}\0");
                                 let bind_ret = libc::mount(
                                     proc_src.as_ptr() as *const libc::c_char,
@@ -137,7 +142,8 @@ pub fn configure_mount_namespace(
         // 3b. Mount private tmpfs over /dev/shm to prevent host shared-memory pollution
         let shm_path = Path::new("/dev/shm");
         if shm_path.exists() && project_root != shm_path {
-            let c_shm = CString::new("/dev/shm").map_err(|e| SandboxError::Namespace(e.to_string()))?;
+            let c_shm =
+                CString::new("/dev/shm").map_err(|e| SandboxError::Namespace(e.to_string()))?;
             let c_tmpfs =
                 CString::new("tmpfs").map_err(|e| SandboxError::Namespace(e.to_string()))?;
             let c_shm_opts =

@@ -33,6 +33,13 @@ if [ ! -d "/etc/apparmor.d" ]; then
   exit 0
 fi
 
+# Detect whether the running kernel actually has an active AppArmor LSM interface BEFORE creating any files
+if [ ! -d "/sys/kernel/security/apparmor" ]; then
+  echo "ℹ Host kernel does not have active AppArmor securityfs (e.g. WSL2 default kernel or AppArmor disabled at boot)."
+  echo "  AppArmor profile enforcement is unavailable on this kernel; ShadowCLI's other sandbox controls remain subject to their own capability checks."
+  exit 0
+fi
+
 echo "==> Installing ShadowCLI AppArmor profile to $APPARMOR_DEST..."
 cp "$PROFILE_SRC" "$APPARMOR_DEST"
 chmod 644 "$APPARMOR_DEST"
@@ -42,7 +49,8 @@ if command -v apparmor_parser >/dev/null 2>&1; then
   apparmor_parser -r "$APPARMOR_DEST"
   echo "✔ Successfully loaded ShadowCLI AppArmor profile."
 else
-  echo "⚠ apparmor_parser not found; profile installed but not loaded."
+  echo "Error: apparmor_parser command not found in PATH." >&2
+  exit 1
 fi
 
 # Check status of kernel.apparmor_restrict_unprivileged_userns

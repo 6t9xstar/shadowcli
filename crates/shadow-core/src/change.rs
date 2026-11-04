@@ -760,35 +760,85 @@ mod tests {
 
     #[test]
     fn test_is_disposable_build_artifact() {
-        assert!(FileChange::is_disposable_build_artifact(Path::new("target/debug/app")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("node_modules/express/index.js")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new(".git/index")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new(".git/logs/HEAD")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("app/__pycache__/app.cpython-310.pyc")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("script.pyc")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("compiled.pyo")));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "target/debug/app"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "node_modules/express/index.js"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            ".git/index"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            ".git/logs/HEAD"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "app/__pycache__/app.cpython-310.pyc"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "script.pyc"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "compiled.pyo"
+        )));
 
         // Nested monorepo structures
-        assert!(FileChange::is_disposable_build_artifact(Path::new("packages/web/node_modules/react/index.js")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("crates/shadow-core/target/debug/lib.rlib")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("apps/web/.next/server/pages.js")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("packages/ui/.turbo/cache/hash.tar.gz")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("backend/services/auth/.pytest_cache/v/cache")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("services/payments/.mypy_cache/3.10/main.data.json")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("shared/.ruff_cache/0.1.0/cache.json")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("android/app/.gradle/buildOutputCleanup/cache.bin")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("submodules/library/.git/config")));
-        assert!(FileChange::is_disposable_build_artifact(Path::new("backend/api/models/__pycache__/user.cpython-311.pyc")));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "packages/web/node_modules/react/index.js"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "crates/shadow-core/target/debug/lib.rlib"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "apps/web/.next/server/pages.js"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "packages/ui/.turbo/cache/hash.tar.gz"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "backend/services/auth/.pytest_cache/v/cache"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "services/payments/.mypy_cache/3.10/main.data.json"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "shared/.ruff_cache/0.1.0/cache.json"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "android/app/.gradle/buildOutputCleanup/cache.bin"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "submodules/library/.git/config"
+        )));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(
+            "backend/api/models/__pycache__/user.cpython-311.pyc"
+        )));
 
         // Legitimate source code files must NOT be marked as disposable artifacts
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("src/main.rs")));
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("Cargo.toml")));
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("package.json")));
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("build.rs")));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "src/main.rs"
+        )));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "Cargo.toml"
+        )));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "package.json"
+        )));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "build.rs"
+        )));
         assert!(!FileChange::is_disposable_build_artifact(Path::new(".env")));
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("src/target_util.rs")));
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("packages/node_modules_parser/index.ts")));
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("crates/target_selector/Cargo.toml")));
-        assert!(!FileChange::is_disposable_build_artifact(Path::new("tests/fixtures/pytest_cache_mock.py")));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "src/target_util.rs"
+        )));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "packages/node_modules_parser/index.ts"
+        )));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "crates/target_selector/Cargo.toml"
+        )));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(
+            "tests/fixtures/pytest_cache_mock.py"
+        )));
     }
 }

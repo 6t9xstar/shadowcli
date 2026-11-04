@@ -12,6 +12,9 @@ Cargo.lock
 # Temporary test artifacts
 /tmp/
 /tests/temp/
+.shadow/
+.claude/
+.mcp.json
 
 # OS artifacts
 .DS_Store

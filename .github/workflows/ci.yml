@@ -18,10 +18,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Configure AppArmor for unprivileged userns
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
       - name: Check code formatting
         run: cargo fmt --all --check
 
@@ -39,13 +35,55 @@ jobs:
       - name: Build shadow binary (Release)
         run: cargo build --release --verbose
 
+      - name: Detect & Validate AppArmor Capabilities
+        run: |
+          echo "=== Host AppArmor Capability Detection ==="
+          if [ ! -d "/sys/kernel/security/apparmor" ]; then
+            echo "ℹ [SKIPPED] AppArmor securityfs not available on runner kernel (/sys/kernel/security/apparmor missing). Skipping AppArmor enforcement validation."
+            exit 0
+          fi
+
+          echo "✔ Active AppArmor securityfs detected."
+          if [ -f "/proc/sys/kernel/apparmor_restrict_unprivileged_userns" ]; then
+            STATUS=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)
+            echo "✔ Ubuntu unprivileged userns restriction setting: $STATUS"
+          else
+            echo "ℹ /proc/sys/kernel/apparmor_restrict_unprivileged_userns not present."
+          fi
+
+          echo "Installing and loading ShadowCLI AppArmor profile..."
+          sudo bash scripts/setup_host_apparmor.sh
+
+          echo "Asserting AppArmor profile enforcement in aa-status..."
+          if ! sudo aa-status 2>/dev/null | grep -E "shadow.*enforce|shadow\s+\(enforce\)|/shadow\b"; then
+            echo "✖ FAILED: ShadowCLI AppArmor profile was not loaded or not in enforce mode!" >&2
+            sudo aa-status 2>/dev/null || true
+            exit 1
+          fi
+          echo "✔ Verified: ShadowCLI AppArmor profile is actively loaded and enforced."
+
+      - name: Cleanup AppArmor Profile
+        if: always()
+        run: |
+          if [ -f "/etc/apparmor.d/shadow" ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/shadow 2>/dev/null || true
+            sudo rm -f /etc/apparmor.d/shadow
+            echo "✔ AppArmor profile cleanup completed."
+          fi
+
       - name: Run Adversarial Security Suite
         run: |
           chmod +x tests/security/*.sh
           bash tests/security/test_adversarial_suite.sh
 
-      - name: Run Transactional Apply & Rollback Tests
+      - name: Run Git & OverlayFS Compatibility Suite
+        run: bash tests/security/test_git_overlayfs.sh
+
+      - name: Run Claude Code MCP Integration Suite
+        run: bash tests/security/test_claude_integration.sh
+
+      - name: Run Transactional Apply & Rollback Suite
         run: bash tests/security/test_apply_rollback.sh
 
-      - name: Run M1 E2E Proof of Concept
-        run: bash tests/m1_e2e_demo.sh
+      - name: Run Claude Code E2E Demo Walkthrough
+        run: bash demos/claude_code_demo.sh

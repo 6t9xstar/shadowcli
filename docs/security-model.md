@@ -3,14 +3,13 @@
 ## 1. Core Principles
 
 ### 1.1 Fail-Closed Guarantee
-If any sandbox preflight check, user namespace initialization, OverlayFS mount, Landlock LSM rule creation, or Seccomp filter fails:
-**ShadowCLI terminates immediately with exit code 125**.
+If any sandbox preflight capability check or privilege probe fails, ShadowCLI terminates immediately with exit code **125**. If runtime mount setup or namespace configuration encounters an error, execution aborts with exit code **1**.
 
 > [!CRITICAL]
-> ShadowCLI will **NEVER** silently fall back to running commands directly on the host operating system. If isolation cannot be verified, execution is refused.
+> ShadowCLI will **NEVER** silently fall back to running commands directly on the host operating system. If isolation cannot be verified, execution fails closed and is refused.
 
 ### 1.2 Zero-Trust Execution
-No command executed by an AI coding agent is trusted to modify developer files directly. All filesystem mutations are quarantined in an ephemeral upper layer until a human developer inspects and approves them.
+No command executed **through ShadowCLI** (`shadow run`, `shadow mcp`) is trusted to modify developer files directly. All filesystem mutations resulting from routed commands are quarantined in an ephemeral upper layer until a human developer inspects and approves them. Commands or tool actions executed outside ShadowCLI (such as native agent runtime file edits or unconfined background IDE extensions) execute directly on the host and are outside this boundary.
 
 ### 1.3 Transactional Apply & Atomic Rollback
 Applying changes from an approved session follows a strict transactional protocol:

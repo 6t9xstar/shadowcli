@@ -57,8 +57,21 @@ git commit -m "feat: initial commit" >/dev/null
 echo "[1/6] Testing git status inside sandbox..."
 # Run git status inside sandbox (should succeed with exit code 0)
 STATUS_OUT=$("$SHADOW_BIN" run -- git status)
-STATUS_SESSION=$(echo "$STATUS_OUT" | grep "ShadowCLI Session:" | head -1 | awk '{print $3}')
-STATUS_DIR=$(find /var/tmp /tmp -name "$STATUS_SESSION" 2>/dev/null | head -1)
+STATUS_SESSION=$(echo "$STATUS_OUT" | grep -oE "01[0-9A-HJ-NP-TV-Z]{24}" | head -1)
+MY_UID=$(id -u)
+STATUS_DIR="/var/tmp/shadowcli-$MY_UID/sessions/$STATUS_SESSION"
+if [ ! -d "$STATUS_DIR" ]; then
+  STATUS_DIR=$(find /var/tmp /tmp -name "$STATUS_SESSION" 2>/dev/null | head -1)
+fi
+
+STATUS_BACKEND=$(grep -oE '"backend":[[:space:]]*"[^"]+"' "$STATUS_DIR/meta.json" 2>/dev/null | awk -F'"' '{print $4}' || echo "unknown")
+echo "  Exercised Backend: $STATUS_BACKEND"
+if [ "$STATUS_BACKEND" != "overlay" ]; then
+  echo "  ✖ Failed: Expected native OverlayFS backend, but sandbox fell back to '$STATUS_BACKEND'." >&2
+  echo "    Ensure test workspace is located on a native Linux filesystem (e.g. ext4, btrfs, tmpfs) supporting unprivileged OverlayFS." >&2
+  exit 1
+fi
+echo "  ✔ Confirmed: Native OverlayFS backend active (no fallback)."
 
 if echo "$STATUS_OUT" | grep -q "Exit code: 0" && grep -q "nothing to commit" "$STATUS_DIR/stdout.log"; then
   echo "  ✔ Passed: Initial git status is completely clean inside sandbox."
@@ -86,9 +99,6 @@ if [ -z "$SESSION_ID" ] || ! echo "$COMMIT_OUT" | grep -q "Exit code: 0"; then
   echo "$COMMIT_OUT"
   exit 1
 fi
-
-echo "  ✔ Passed: git add & git commit succeeded inside sandbox (atomic index.lock rename ok)."
-echo "  Staged Session: $SESSION_ID"
 
 echo "  ✔ Passed: git add & git commit succeeded inside sandbox (atomic index.lock rename ok)."
 echo "  Staged Session: $SESSION_ID"
