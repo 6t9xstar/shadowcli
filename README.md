@@ -72,7 +72,7 @@ Giving autonomous agents unrestricted access to your developer machine is inhere
 | Feature | Direct Host Execution | Docker / Dev Containers | **ShadowCLI** |
 | :--- | :---: | :---: | :---: |
 | **Setup Overhead** | None | High (huge image builds, daemon) | **Instant (single unprivileged binary)** |
-| **Host Protection** | ❌ None (direct root/user mutation) | ⚠️ Partial (volume mounts bypass isolation) | **✅ 100% Isolated (CoW OverlayFS)** |
+| **Host Protection** | ❌ None (direct root/user mutation) | ⚠️ Partial (volume mounts bypass isolation) | **✅ Isolated CoW Delta Layer (OverlayFS / CopyFS)** |
 | **Root Required** | N/A | ❌ Yes (Docker daemon / sudo) | **✅ No (pure unprivileged userns)** |
 | **Secret Protection** | ❌ None (`~/.ssh`, `~/.aws` exposed) | ⚠️ Requires manual volume exclusion | **✅ Auto-masked (`$HOME` tmpfs + LSM)** |
 | **Network Egress** | ❌ Open by default | ⚠️ Open by default | **✅ Blocked by default (opt-in)** |
@@ -278,6 +278,10 @@ ShadowCLI includes a rigorous automated adversarial test harness ([`tests/securi
 | **6** | **SUID Privilege Escalation** | Agent creates `chmod 4755 backdoor.sh` inside sandbox | **STRIPPED (Mode 755 applied)** |
 | **7** | **Runaway Process DOS** | Spawning infinite loop or unkillable background child | **SIGKILL (Clean timeout after N sec)** |
 | **8** | **Symlink Path Traversal** | Agent crafts symlink targeting `/etc/shadow` or `../../../../` | **REJECTED (Confinement check)** |
+| **9** | **CopyFS Credential Isolation** | Reading host credentials under fallback CopyFS mode | **BLOCKED (Namespace & tmpfs)** |
+| **10** | **CopyFS Network Isolation** | Outbound networking under fallback CopyFS mode | **BLOCKED (Isolated Netns)** |
+| **11** | **Background Orphan Reaping** | Background daemons (`sleep 999 &`) escaping sandbox lifecycle | **REAPED (PID 1 Kill -1 SIGKILL)** |
+| **12** | **Multiline Secret Redaction** | Multiline private keys and tokens in terminal diff | **REDACTED ([REDACTED SECRET: ...])** |
 
 ---
 

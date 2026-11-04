@@ -28,52 +28,104 @@ fn validate_symlink_target(project_root: &Path, rel_link_path: &Path, target: &P
         .canonicalize()
         .unwrap_or_else(|_| project_root.to_path_buf());
 
-    let resolved_target = if target.is_absolute() {
+    let link_parent = project_root
+        .join(rel_link_path)
+        .parent()
+        .unwrap_or(project_root)
+        .to_path_buf();
+
+    let full_target = if target.is_absolute() {
         target.to_path_buf()
     } else {
-        let link_parent = project_root
-            .join(rel_link_path)
-            .parent()
-            .unwrap_or(project_root)
-            .to_path_buf();
         link_parent.join(target)
     };
 
-    if target.is_absolute() {
-        if !resolved_target.starts_with(&canonical_proj) {
-            bail!(
-                "Security violation: symlink '{}' has absolute target '{}' outside project root",
-                rel_link_path.display(),
-                target.display()
-            );
-        }
-    } else {
-        // Check for '..' escaping above project root
-        let mut depth = 0isize;
-        for comp in rel_link_path.parent().unwrap_or(Path::new("")).components() {
-            if let Component::Normal(_) = comp {
-                depth += 1;
-            }
-        }
-        for comp in target.components() {
-            match comp {
-                Component::ParentDir => {
-                    depth -= 1;
-                    if depth < 0 {
-                        bail!(
-                            "Security violation: relative symlink '{}' points to '{}' which escapes project root",
-                            rel_link_path.display(),
-                            target.display()
-                        );
-                    }
+    // Normalize path components to check for root-escaping '..'
+    let mut normalized = PathBuf::new();
+    for comp in full_target.components() {
+        match comp {
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    bail!(
+                        "Security violation: symlink '{}' escapes filesystem root via '..'",
+                        rel_link_path.display()
+                    );
                 }
-                Component::Normal(_) => depth += 1,
-                _ => {}
             }
+            Component::CurDir => {}
+            _ => normalized.push(comp.as_os_str()),
         }
     }
 
+    if let Ok(canon) = normalized.canonicalize() {
+        if !canon.starts_with(&canonical_proj) {
+            bail!(
+                "Security violation: symlink '{}' resolves to '{}' outside project root",
+                rel_link_path.display(),
+                canon.display()
+            );
+        }
+    } else if !normalized.starts_with(&canonical_proj) {
+        bail!(
+            "Security violation: relative symlink '{}' points to '{}' which escapes project root",
+            rel_link_path.display(),
+            target.display()
+        );
+    }
+
     Ok(())
+}
+
+/// Mutual exclusion lock preventing concurrent apply/rollback operations on the same session.
+struct ApplyLock {
+    lock_path: PathBuf,
+    #[cfg(unix)]
+    lock_fd: Option<std::os::fd::RawFd>,
+}
+
+impl ApplyLock {
+    fn acquire(session_dir: &Path) -> Result<Self> {
+        let lock_path = session_dir.join("apply.lock");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::os::unix::io::AsRawFd;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(&lock_path)?;
+            let fd = file.as_raw_fd();
+            let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+            if ret != 0 {
+                bail!("Apply lock violation: session is currently locked by another concurrent apply or rollback operation.");
+            }
+            std::mem::forget(file);
+            Ok(Self {
+                lock_path,
+                lock_fd: Some(fd),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self { lock_path })
+        }
+    }
+}
+
+impl Drop for ApplyLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(fd) = self.lock_fd {
+            unsafe {
+                libc::flock(fd, libc::LOCK_UN);
+                libc::close(fd);
+            }
+            let _ = fs::remove_file(&self.lock_path);
+        }
+    }
 }
 
 pub fn execute(
@@ -110,6 +162,8 @@ pub fn execute(
             }
         }
     };
+
+    let _apply_lock = ApplyLock::acquire(&paths.root)?;
 
     if rollback {
         return handle_rollback(&store, &paths, &mut meta);
@@ -209,13 +263,29 @@ pub fn execute(
             }
         }
 
+        let sym_meta = fs::symlink_metadata(&dest).ok();
+
         // Backup existing destination if it exists
-        if dest.exists() || fs::symlink_metadata(&dest).is_ok() {
+        if let Some(meta) = &sym_meta {
             let backup_dest = paths.backup_dir.join(&change.relative_path);
             if let Some(parent) = backup_dest.parent() {
                 fs::create_dir_all(parent)?;
             }
-            if dest.is_file() {
+            if meta.file_type().is_symlink() {
+                if let Ok(link_target) = fs::read_link(&dest) {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::symlink;
+                        let _ = fs::remove_file(&backup_dest);
+                        symlink(&link_target, &backup_dest)?;
+                        writeln!(
+                            journal_file,
+                            "BACKUP_SYMLINK:{}",
+                            change.relative_path.display()
+                        )?;
+                    }
+                }
+            } else if meta.is_file() {
                 fs::copy(&dest, &backup_dest)?;
                 writeln!(journal_file, "BACKUP:{}", change.relative_path.display())?;
             }
@@ -261,8 +331,18 @@ pub fn execute(
                 if src.is_dir() {
                     fs::create_dir_all(&dest)?;
                 } else if src.is_file() {
-                    // Safe atomic write: write to temp file, fsync, rename
-                    let temp_dest = dest.with_extension(format!("shadow_tmp_{}", Ulid::new()));
+                    // Hardlink attack prevention: if destination has multiple hard links, unlink it first
+                    // so we do not overwrite external host files pointing to the same inode
+                    #[cfg(unix)]
+                    if let Some(meta) = &sym_meta {
+                        use std::os::unix::fs::MetadataExt;
+                        if meta.nlink() > 1 && !meta.is_dir() {
+                            let _ = fs::remove_file(&dest);
+                        }
+                    }
+
+                    // Safe atomic write: write to temp file in same directory, fsync, rename
+                    let temp_dest = dest.with_file_name(format!(".shadow_tmp_{}", Ulid::new()));
                     {
                         let mut infile = File::open(&src)?;
                         let mut outfile = File::create(&temp_dest)?;
@@ -333,12 +413,34 @@ fn handle_rollback(
                 fs::copy(&backup_file, &target_file)?;
                 println!("  Restored deleted {}", rel_path.display());
             }
+        } else if let Some(rel_path_str) = line.strip_prefix("BACKUP_SYMLINK:") {
+            let rel_path = PathBuf::from(rel_path_str);
+            let backup_file = paths.backup_dir.join(&rel_path);
+            let target_file = project_root.join(&rel_path);
+
+            if let Ok(target) = fs::read_link(&backup_file) {
+                let _ = fs::remove_file(&target_file);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::symlink;
+                    let _ = symlink(&target, &target_file);
+                }
+                println!("  Restored symlink {}", rel_path.display());
+            }
         } else if let Some(rel_path_str) = line.strip_prefix("SYMLINK:") {
             let rel_path = PathBuf::from(rel_path_str);
             let backup_file = paths.backup_dir.join(&rel_path);
             let target_file = project_root.join(&rel_path);
 
-            if backup_file.exists() {
+            if let Ok(target) = fs::read_link(&backup_file) {
+                let _ = fs::remove_file(&target_file);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::symlink;
+                    let _ = symlink(&target, &target_file);
+                }
+                println!("  Restored symlink {}", rel_path.display());
+            } else if backup_file.exists() {
                 let _ = fs::remove_file(&target_file);
                 fs::copy(&backup_file, &target_file)?;
                 println!("  Restored {}", rel_path.display());

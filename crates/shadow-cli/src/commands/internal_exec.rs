@@ -18,6 +18,7 @@ pub fn execute(
     policy_path: Option<PathBuf>,
     _allow_network: bool,
     allow_host_home: bool,
+    copy_backend: bool,
     cmd: Vec<String>,
 ) -> Result<i32> {
     #[cfg(not(target_os = "linux"))]
@@ -30,6 +31,7 @@ pub fn execute(
             policy_path,
             _allow_network,
             allow_host_home,
+            copy_backend,
             cmd,
         );
         bail!("InternalExec is only supported on Linux");
@@ -37,9 +39,11 @@ pub fn execute(
 
     #[cfg(target_os = "linux")]
     {
-        // 1. Mount OverlayFS into merged directory
-        mount_unprivileged_overlay(&project, &upper, &work, &merged)
-            .map_err(|e| anyhow::anyhow!("Overlay mount failed: {e}"))?;
+        // 1. Mount OverlayFS into merged directory (unless running under CopyFS backend)
+        if !copy_backend {
+            mount_unprivileged_overlay(&project, &upper, &work, &merged)
+                .map_err(|e| anyhow::anyhow!("Overlay mount failed: {e}"))?;
+        }
 
         // 2. Configure mount namespace (make private, mask $HOME, private /tmp, fresh /proc, ro /sys, bind project)
         configure_mount_namespace(&project, &merged, allow_host_home)
@@ -48,7 +52,11 @@ pub fn execute(
         // 3. Set hostname inside UTS namespace
         unsafe {
             let hostname = b"shadow-sandbox\0";
-            let _ = libc::sethostname(hostname.as_ptr() as *const libc::c_char, 14);
+            let ret = libc::sethostname(hostname.as_ptr() as *const libc::c_char, 14);
+            if ret != 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(anyhow::anyhow!("Failed to set sandbox hostname: {err}"));
+            }
         }
 
         // 4. Change working directory to project
@@ -59,12 +67,13 @@ pub fn execute(
         let policy = ShadowPolicy::load_or_default(&project, policy_path.as_deref())
             .map_err(|e| anyhow::anyhow!("Failed to load policy: {e}"))?;
 
-        // 6. Apply Landlock restrictions
-        let _ =
-            apply_landlock_restrictions(&project, &policy.filesystem.runtime_read_paths, &policy);
+        // 6. Apply Landlock restrictions (Mandatory Fail-Closed)
+        apply_landlock_restrictions(&project, &policy.filesystem.runtime_read_paths, &policy)
+            .map_err(|e| anyhow::anyhow!("Landlock LSM enforcement failed: {e}"))?;
 
-        // 7. Apply Seccomp policy
-        let _ = apply_seccomp_policy();
+        // 7. Apply Seccomp policy (Mandatory Fail-Closed)
+        apply_seccomp_policy()
+            .map_err(|e| anyhow::anyhow!("Seccomp BPF enforcement failed: {e}"))?;
 
         // 8. Run command through PID 1 init
         let exit_code = run_pid1_init(|| {

@@ -59,8 +59,22 @@ fn secret_patterns() -> &'static Vec<SecretPattern> {
                 regex: Regex::new(r"\b(xox[baprs]-[0-9a-zA-Z]{10,48})\b").expect("valid regex"),
             },
             SecretPattern {
-                name: "Private Key Header",
-                regex: Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----").expect("valid regex"),
+                name: "Private Key Block",
+                regex: Regex::new(r"(?s)-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----.*?-----END [A-Z0-9 ]+PRIVATE KEY-----")
+                    .expect("valid regex"),
+            },
+            SecretPattern {
+                name: "JWT Token",
+                regex: Regex::new(r"\beyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*\b")
+                    .expect("valid regex"),
+            },
+            SecretPattern {
+                name: "Stripe API Key",
+                regex: Regex::new(r"\b(sk_live_[0-9a-zA-Z]{24,})\b").expect("valid regex"),
+            },
+            SecretPattern {
+                name: "HuggingFace Token",
+                regex: Regex::new(r"\b(hf_[a-zA-Z0-9]{34,})\b").expect("valid regex"),
             },
             SecretPattern {
                 name: "Generic Secret Assignment",
@@ -73,6 +87,10 @@ fn secret_patterns() -> &'static Vec<SecretPattern> {
 
 /// Redacts any recognized secrets in `text`, replacing them with `[REDACTED SECRET: <TYPE>]`.
 /// Returns the redacted text and a boolean indicating whether any secret was redacted.
+///
+/// NOTE: Heuristic regex redaction is a defense-in-depth mitigation for logs, diff views, and
+/// terminal outputs. It does not provide cryptographic guarantees against intentional secret
+/// obfuscation or custom token formats.
 pub fn redact_secrets(text: &str) -> (String, bool) {
     let mut modified = false;
     let mut result = text.to_string();
@@ -137,5 +155,32 @@ mod tests {
         assert!(found);
         assert!(!redacted.contains("SuperSecretPassword123!"));
         assert!(redacted.contains("[REDACTED SECRET: Generic Secret Assignment]"));
+    }
+
+    #[test]
+    fn test_redact_multiline_private_key() {
+        let text = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0m...\n...SECRET KEY CONTENT...\n-----END RSA PRIVATE KEY-----";
+        let (redacted, found) = redact_secrets(text);
+        assert!(found);
+        assert!(!redacted.contains("SECRET KEY CONTENT"));
+        assert!(!redacted.contains("-----END RSA PRIVATE KEY-----"));
+        assert_eq!(redacted, "[REDACTED SECRET: Private Key Block]");
+    }
+
+    #[test]
+    fn test_redact_modern_api_tokens() {
+        let stripe_token = format!("{}_{}", "sk_live", "1234567890abcdef12345678");
+        let hf_token = format!("{}_{}", "hf", "Abcdefghijklmnopqrstuvwxyz12345678");
+        let text = format!(
+            "stripe={stripe_token}\nhf={hf_token}\njwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThisSignature"
+        );
+        let (redacted, found) = redact_secrets(&text);
+        assert!(found);
+        assert!(!redacted.contains(&stripe_token));
+        assert!(!redacted.contains(&hf_token));
+        assert!(!redacted.contains("doNotLeakThisSignature"));
+        assert!(redacted.contains("[REDACTED SECRET: Stripe API Key]"));
+        assert!(redacted.contains("[REDACTED SECRET: HuggingFace Token]"));
+        assert!(redacted.contains("[REDACTED SECRET: JWT Token]"));
     }
 }

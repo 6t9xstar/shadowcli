@@ -2,6 +2,19 @@ use crate::error::{Result, SandboxError};
 use std::ffi::CString;
 use std::path::Path;
 
+fn validate_overlay_path(name: &str, path_str: &str) -> Result<()> {
+    if path_str.contains(',')
+        || path_str.contains(':')
+        || path_str.contains('\n')
+        || path_str.contains('\0')
+    {
+        return Err(SandboxError::Overlay(format!(
+            "Path contains invalid characters (comma, colon, newline, or null) for OverlayFS mount options: {name}={path_str}"
+        )));
+    }
+    Ok(())
+}
+
 pub fn mount_unprivileged_overlay(
     lower_dir: &Path,
     upper_dir: &Path,
@@ -17,6 +30,10 @@ pub fn mount_unprivileged_overlay(
     let work_str = work_dir
         .to_str()
         .ok_or_else(|| SandboxError::Overlay("Invalid UTF-8 in workdir path".to_string()))?;
+
+    validate_overlay_path("lowerdir", lower_str)?;
+    validate_overlay_path("upperdir", upper_str)?;
+    validate_overlay_path("workdir", work_str)?;
 
     let mount_options = format!(
         "lowerdir={},upperdir={},workdir={},userxattr",

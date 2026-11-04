@@ -1,6 +1,6 @@
 use crate::error::{Result, SandboxError};
 
-// List of denied syscall names on x86_64
+// List of denied syscall names on x86_64 & aarch64
 pub const DENIED_SYSCALLS: &[&str] = &[
     "kexec_load",
     "kexec_file_load",
@@ -28,9 +28,21 @@ pub const DENIED_SYSCALLS: &[&str] = &[
     "io_uring_enter",
     "io_uring_register",
     "personality",
+    "process_vm_readv",
+    "process_vm_writev",
+    "syslog",
+    "lookup_dcookie",
 ];
 
 pub fn apply_seccomp_policy() -> Result<()> {
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        return Err(SandboxError::Seccomp(
+            "Seccomp BPF filter currently only supports x86_64 and aarch64 architectures"
+                .to_string(),
+        ));
+    }
+
     // 1. Ensure PR_SET_NO_NEW_PRIVS is set (mandatory before unprivileged seccomp filter)
     unsafe {
         let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
@@ -43,7 +55,6 @@ pub fn apply_seccomp_policy() -> Result<()> {
     }
 
     // 2. Build BPF filter denying dangerous syscalls with EPERM, allowing all others
-    // We construct a classic BPF program using libc sock_filter for zero-dependency reliability
     let mut filter = Vec::new();
 
     // BPF_LD | BPF_W | BPF_ABS: Load arch from seccomp_data.arch (offset 4)
@@ -54,11 +65,10 @@ pub fn apply_seccomp_policy() -> Result<()> {
         k: 4, // offsetof(struct seccomp_data, arch)
     });
 
-    // Check arch matches AUDIT_ARCH_X86_64 = 0xc000003e
     #[cfg(target_arch = "x86_64")]
-    let expected_arch = 0xc000003eu32;
+    let expected_arch = 0xc000003eu32; // AUDIT_ARCH_X86_64
     #[cfg(target_arch = "aarch64")]
-    let expected_arch = 0xc00000b7u32;
+    let expected_arch = 0xc00000b7u32; // AUDIT_ARCH_AARCH64
 
     filter.push(libc::sock_filter {
         code: 0x15, // BPF_JMP | BPF_JEQ | BPF_K
@@ -112,6 +122,10 @@ pub fn apply_seccomp_policy() -> Result<()> {
         426, // SYS_io_uring_enter
         427, // SYS_io_uring_register
         135, // SYS_personality
+        310, // SYS_process_vm_readv
+        311, // SYS_process_vm_writev
+        103, // SYS_syslog
+        212, // SYS_lookup_dcookie
     ];
 
     #[cfg(target_arch = "aarch64")]
@@ -140,6 +154,10 @@ pub fn apply_seccomp_policy() -> Result<()> {
         426, // SYS_io_uring_enter
         427, // SYS_io_uring_register
         92,  // SYS_personality
+        270, // SYS_process_vm_readv
+        271, // SYS_process_vm_writev
+        116, // SYS_syslog
+        18,  // SYS_lookup_dcookie
     ];
 
     // For each denied syscall, if equal, return SECCOMP_RET_ERRNO(EPERM = 1)

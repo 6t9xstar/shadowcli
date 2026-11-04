@@ -106,7 +106,15 @@ impl DiffRenderer {
             }
         }
 
-        let diff = TextDiff::from_lines(&old_content, &new_content);
+        let (old_to_diff, new_to_diff) = if !self.show_sensitive {
+            let (r_old, _) = redact_secrets(&old_content);
+            let (r_new, _) = redact_secrets(&new_content);
+            (r_old, r_new)
+        } else {
+            (old_content, new_content)
+        };
+
+        let diff = TextDiff::from_lines(&old_to_diff, &new_to_diff);
         for group in diff.grouped_ops(self.context_lines) {
             // Render hunk header
             if let (Some(first), Some(last)) = (group.first(), group.last()) {
@@ -131,15 +139,8 @@ impl DiffRenderer {
                         ChangeTag::Insert => "+",
                         ChangeTag::Equal => " ",
                     };
-                    let val = change_item.value();
-                    let line_content = if !self.show_sensitive {
-                        let (redacted, _) = redact_secrets(val);
-                        redacted
-                    } else {
-                        val.to_string()
-                    };
                     output.push_str(sign);
-                    output.push_str(&line_content);
+                    output.push_str(change_item.value());
                 }
             }
         }

@@ -157,6 +157,9 @@ pub enum Commands {
         #[arg(long)]
         allow_host_home: bool,
 
+        #[arg(long)]
+        copy_backend: bool,
+
         #[arg(trailing_var_arg = true, required = true)]
         cmd: Vec<String>,
     },

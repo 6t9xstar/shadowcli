@@ -33,8 +33,11 @@ jobs:
         env:
           SHADOW_REQUIRE_SANDBOX: "1"
 
-      - name: Build shadow binary
+      - name: Build shadow binary (Debug)
         run: cargo build --verbose
+
+      - name: Build shadow binary (Release)
+        run: cargo build --release --verbose
 
       - name: Run Adversarial Security Suite
         run: |

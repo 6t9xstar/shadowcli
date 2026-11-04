@@ -84,6 +84,7 @@ fn main() -> ExitCode {
             policy,
             allow_network,
             allow_host_home,
+            copy_backend,
             cmd,
         } => commands::internal_exec::execute(
             project,
@@ -93,6 +94,7 @@ fn main() -> ExitCode {
             policy,
             allow_network,
             allow_host_home,
+            copy_backend,
             cmd,
         ),
     };
