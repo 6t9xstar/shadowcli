@@ -6,8 +6,75 @@ use shadow_core::{
 };
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use ulid::Ulid;
+
+/// Validates that a relative path does not attempt directory traversal.
+fn validate_relative_path(path: &Path) -> Result<()> {
+    for comp in path.components() {
+        if let Component::ParentDir = comp {
+            bail!(
+                "Security violation: path traversal '..' detected in '{}'",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Validates that a symlink target does not point outside the project root.
+fn validate_symlink_target(project_root: &Path, rel_link_path: &Path, target: &Path) -> Result<()> {
+    let canonical_proj = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+
+    let resolved_target = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        let link_parent = project_root
+            .join(rel_link_path)
+            .parent()
+            .unwrap_or(project_root)
+            .to_path_buf();
+        link_parent.join(target)
+    };
+
+    if target.is_absolute() {
+        if !resolved_target.starts_with(&canonical_proj) {
+            bail!(
+                "Security violation: symlink '{}' has absolute target '{}' outside project root",
+                rel_link_path.display(),
+                target.display()
+            );
+        }
+    } else {
+        // Check for '..' escaping above project root
+        let mut depth = 0isize;
+        for comp in rel_link_path.parent().unwrap_or(Path::new("")).components() {
+            if let Component::Normal(_) = comp {
+                depth += 1;
+            }
+        }
+        for comp in target.components() {
+            match comp {
+                Component::ParentDir => {
+                    depth -= 1;
+                    if depth < 0 {
+                        bail!(
+                            "Security violation: relative symlink '{}' points to '{}' which escapes project root",
+                            rel_link_path.display(),
+                            target.display()
+                        );
+                    }
+                }
+                Component::Normal(_) => depth += 1,
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
 
 pub fn execute(
     apply_all: bool,
@@ -25,16 +92,27 @@ pub fn execute(
             let id = Ulid::from_string(&id_str)?;
             store.load_meta(&id)?
         }
-        None => match store.find_latest_unapplied(current_dir)? {
-            Some((m, p)) => (m, p),
-            None => {
-                bail!("No active or unapplied ShadowCLI session found for this project.");
+        None => {
+            if rollback {
+                match store.find_latest_applied(current_dir)? {
+                    Some((m, p)) => (m, p),
+                    None => {
+                        bail!("No applied ShadowCLI session found to rollback for this project.");
+                    }
+                }
+            } else {
+                match store.find_latest_unapplied(current_dir)? {
+                    Some((m, p)) => (m, p),
+                    None => {
+                        bail!("No active or unapplied ShadowCLI session found for this project.");
+                    }
+                }
             }
-        },
+        }
     };
 
     if rollback {
-        return handle_rollback(&paths, &meta.project_path);
+        return handle_rollback(&store, &paths, &mut meta);
     }
 
     if meta.state == SessionState::Applied {
@@ -106,21 +184,33 @@ pub fn execute(
         meta.project_path.display()
     );
 
+    let canonical_project = meta
+        .project_path
+        .canonicalize()
+        .unwrap_or_else(|_| meta.project_path.clone());
+
     for change in &changes {
+        validate_relative_path(&change.relative_path)?;
+
         let dest = meta.project_path.join(&change.relative_path);
         let src = paths.upper_dir.join(&change.relative_path);
 
-        // Security check: ensure destination resolves beneath project root
-        let _canonical_project = meta
-            .project_path
-            .canonicalize()
-            .unwrap_or_else(|_| meta.project_path.clone());
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
+            // Confinement check: verify parent resides inside project root
+            let canonical_parent = parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf());
+            if !canonical_parent.starts_with(&canonical_project) {
+                bail!(
+                    "Security violation: path '{}' escapes project root",
+                    dest.display()
+                );
+            }
         }
 
         // Backup existing destination if it exists
-        if dest.exists() {
+        if dest.exists() || fs::symlink_metadata(&dest).is_ok() {
             let backup_dest = paths.backup_dir.join(&change.relative_path);
             if let Some(parent) = backup_dest.parent() {
                 fs::create_dir_all(parent)?;
@@ -133,7 +223,7 @@ pub fn execute(
 
         match change.change_type {
             ChangeType::Deleted => {
-                if dest.exists() {
+                if dest.exists() || fs::symlink_metadata(&dest).is_ok() {
                     if dest.is_dir() {
                         fs::remove_dir_all(&dest)?;
                     } else {
@@ -149,7 +239,9 @@ pub fn execute(
             }
             ChangeType::SymlinkCreated => {
                 if let Some(target) = &change.symlink_target {
-                    if dest.exists() {
+                    validate_symlink_target(&meta.project_path, &change.relative_path, target)?;
+
+                    if dest.exists() || fs::symlink_metadata(&dest).is_ok() {
                         let _ = fs::remove_file(&dest);
                     }
                     #[cfg(unix)]
@@ -206,11 +298,16 @@ pub fn execute(
     Ok(0)
 }
 
-fn handle_rollback(paths: &shadow_core::SessionPaths, project_root: &Path) -> Result<i32> {
+fn handle_rollback(
+    store: &SessionStore,
+    paths: &shadow_core::SessionPaths,
+    meta: &mut shadow_core::SessionMeta,
+) -> Result<i32> {
     if !paths.journal_file.exists() {
         bail!("No apply journal found for this session; cannot roll back.");
     }
 
+    let project_root = &meta.project_path;
     println!("Rolling back applied changes from session backup...");
     let journal_content = fs::read_to_string(&paths.journal_file)?;
 
@@ -223,7 +320,7 @@ fn handle_rollback(paths: &shadow_core::SessionPaths, project_root: &Path) -> Re
             if backup_file.exists() {
                 fs::copy(&backup_file, &target_file)?;
                 println!("  Restored {}", rel_path.display());
-            } else if target_file.exists() {
+            } else if target_file.exists() || fs::symlink_metadata(&target_file).is_ok() {
                 fs::remove_file(&target_file)?;
                 println!("  Removed newly added {}", rel_path.display());
             }
@@ -236,8 +333,25 @@ fn handle_rollback(paths: &shadow_core::SessionPaths, project_root: &Path) -> Re
                 fs::copy(&backup_file, &target_file)?;
                 println!("  Restored deleted {}", rel_path.display());
             }
+        } else if let Some(rel_path_str) = line.strip_prefix("SYMLINK:") {
+            let rel_path = PathBuf::from(rel_path_str);
+            let backup_file = paths.backup_dir.join(&rel_path);
+            let target_file = project_root.join(&rel_path);
+
+            if backup_file.exists() {
+                let _ = fs::remove_file(&target_file);
+                fs::copy(&backup_file, &target_file)?;
+                println!("  Restored {}", rel_path.display());
+            } else if target_file.exists() || fs::symlink_metadata(&target_file).is_ok() {
+                fs::remove_file(&target_file)?;
+                println!("  Removed symlink {}", rel_path.display());
+            }
         }
     }
+
+    meta.state = SessionState::Finished;
+    store.save_meta(paths, meta)?;
+    let _ = fs::remove_file(&paths.journal_file);
 
     println!("{}", "Rollback completed successfully.".green().bold());
     Ok(0)

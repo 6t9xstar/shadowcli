@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use colored::*;
 use shadow_core::{classify_changes, DiffRenderer, ProjectManifest, ReviewState, SessionStore};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use ulid::Ulid;
 
 pub fn execute(session_id: Option<String>, current_dir: &Path) -> Result<i32> {
@@ -43,8 +43,11 @@ pub fn execute(session_id: Option<String>, current_dir: &Path) -> Result<i32> {
 
     let mut state = ReviewState::new();
     let renderer = DiffRenderer::new(false);
+    let mut approved_paths: Vec<PathBuf> = Vec::new();
 
-    for (idx, change) in changes.iter().enumerate() {
+    let mut idx = 0;
+    while idx < changes.len() {
+        let change = &changes[idx];
         let rel_display = change.relative_path.display();
         let tag = format!("{:?}", change.change_type).to_uppercase();
 
@@ -62,15 +65,27 @@ pub fn execute(session_id: Option<String>, current_dir: &Path) -> Result<i32> {
 
             let mut input = String::new();
             io::stdin().read_line(&mut input)?;
-            let choice = input.trim().to_lowercase();
+            let raw = input.trim();
 
-            match choice.as_str() {
+            if raw == "A" || raw.eq_ignore_ascii_case("all") {
+                state.approve_all(&changes[idx..]);
+                for c in &changes[idx..] {
+                    approved_paths.push(c.relative_path.clone());
+                }
+                println!("{} Approved all remaining changes", "✔".green());
+                idx = changes.len();
+                break;
+            }
+
+            match raw.to_lowercase().as_str() {
                 "a" => {
                     state.set_decision(
                         change.relative_path.clone(),
                         shadow_core::ApproveDecision::Approve,
                     );
+                    approved_paths.push(change.relative_path.clone());
                     println!("{} Approved", "✔".green());
+                    idx += 1;
                     break;
                 }
                 "r" => {
@@ -79,17 +94,13 @@ pub fn execute(session_id: Option<String>, current_dir: &Path) -> Result<i32> {
                         shadow_core::ApproveDecision::Reject,
                     );
                     println!("{} Rejected", "✖".red());
+                    idx += 1;
                     break;
                 }
                 "d" => {
                     let diff_str =
                         renderer.render_change(change, &meta.project_path, &paths.upper_dir)?;
                     println!("\n{diff_str}");
-                }
-                "all" => {
-                    state.approve_all(&changes[idx..]);
-                    println!("{} Approved all remaining changes", "✔".green());
-                    return Ok(0);
                 }
                 "q" | "quit" => {
                     println!("Review paused.");
@@ -102,6 +113,34 @@ pub fn execute(session_id: Option<String>, current_dir: &Path) -> Result<i32> {
         }
     }
 
-    println!("\nReview completed. Run 'shadow apply' to apply approved changes.");
+    if approved_paths.is_empty() {
+        println!("\nNo changes were approved.");
+        return Ok(0);
+    }
+
+    println!(
+        "\n{} {} file(s) approved.",
+        "✔".green().bold(),
+        approved_paths.len()
+    );
+    print!("Apply approved changes to host project now? [y/N]: ");
+    io::stdout().flush()?;
+
+    let mut apply_input = String::new();
+    io::stdin().read_line(&mut apply_input)?;
+    if apply_input.trim().eq_ignore_ascii_case("y") {
+        crate::commands::apply::execute(
+            false,
+            true,
+            false,
+            false,
+            Some(meta.id.to_string()),
+            &approved_paths,
+            current_dir,
+        )?;
+    } else {
+        println!("Approved changes recorded. Run 'shadow apply' when ready.");
+    }
+
     Ok(0)
 }

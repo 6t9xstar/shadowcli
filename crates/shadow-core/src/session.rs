@@ -225,6 +225,23 @@ impl SessionStore {
         Ok(None)
     }
 
+    pub fn find_latest_applied(
+        &self,
+        project_path: &Path,
+    ) -> Result<Option<(SessionMeta, SessionPaths)>> {
+        let canonical = project_path
+            .canonicalize()
+            .unwrap_or_else(|_| project_path.to_path_buf());
+
+        for meta in self.list_sessions()? {
+            if meta.project_path == canonical && meta.state == SessionState::Applied {
+                let paths = SessionPaths::new(&self.base_dir, &meta.id);
+                return Ok(Some((meta, paths)));
+            }
+        }
+        Ok(None)
+    }
+
     pub fn discard_session(&self, id: &Ulid) -> Result<()> {
         let paths = SessionPaths::new(&self.base_dir, id);
         if paths.root.exists() {
