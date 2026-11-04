@@ -151,15 +151,17 @@ pub fn apply_landlock_restrictions(
         ];
         for rel in &cache_candidates {
             let cache_dir = home_path.join(rel);
-            if cache_dir.exists() {
-                if let Ok(fd) = PathFd::new(&cache_dir) {
-                    ruleset = ruleset
-                        .add_rule(PathBeneath::new(fd, read_exec_access))
-                        .map_err(|e| {
-                            SandboxError::Landlock(format!(
-                                "Failed to add Landlock rule for package cache {rel}: {e}"
-                            ))
-                        })?;
+            if let Ok(meta) = std::fs::symlink_metadata(&cache_dir) {
+                if meta.is_dir() && !meta.file_type().is_symlink() {
+                    if let Ok(fd) = PathFd::new(&cache_dir) {
+                        ruleset = ruleset
+                            .add_rule(PathBeneath::new(fd, read_exec_access))
+                            .map_err(|e| {
+                                SandboxError::Landlock(format!(
+                                    "Failed to add Landlock rule for package cache {rel}: {e}"
+                                ))
+                            })?;
+                    }
                 }
             }
         }
@@ -194,15 +196,44 @@ pub fn apply_landlock_restrictions(
             SandboxError::Landlock(format!("Failed to add Landlock rule for /tmp: {e}"))
         })?;
 
-    // 3b. Allow Read + Write on /dev (MANDATORY for /dev/null, /dev/zero, /dev/urandom)
+    // 3b. Narrowly scope device access:
+    // - Allow Read + Write strictly on safe virtual character devices (/dev/null, /dev/zero, /dev/urandom)
+    // - Allow Read + Write on isolated private /dev/shm tmpfs
+    // - Allow Read-Only access on /dev directory hierarchy for device enumeration (no write access)
+    let safe_device_nodes = ["/dev/null", "/dev/zero", "/dev/urandom"];
+    let file_rw = AccessFs::ReadFile | AccessFs::WriteFile;
+    for node in &safe_device_nodes {
+        let node_p = Path::new(node);
+        if node_p.exists() {
+            if let Ok(dev_fd) = PathFd::new(node_p) {
+                ruleset = ruleset
+                    .add_rule(PathBeneath::new(dev_fd, file_rw))
+                    .map_err(|e| {
+                        SandboxError::Landlock(format!("Failed to add Landlock rule for {node}: {e}"))
+                    })?;
+            }
+        }
+    }
+
+    let shm_path = Path::new("/dev/shm");
+    if shm_path.exists() {
+        if let Ok(shm_fd) = PathFd::new(shm_path) {
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(shm_fd, all_fs_access))
+                .map_err(|e| {
+                    SandboxError::Landlock(format!("Failed to add Landlock rule for /dev/shm: {e}"))
+                })?;
+        }
+    }
+
     let dev_path = Path::new("/dev");
     if dev_path.exists() {
         if let Ok(dev_fd) = PathFd::new(dev_path) {
-            let dev_access = AccessFs::from_read(abi) | AccessFs::from_write(abi);
+            let dev_access = AccessFs::from_read(abi);
             ruleset = ruleset
                 .add_rule(PathBeneath::new(dev_fd, dev_access))
                 .map_err(|e| {
-                    SandboxError::Landlock(format!("Failed to add Landlock rule for /dev: {e}"))
+                    SandboxError::Landlock(format!("Failed to add Landlock read rule for /dev: {e}"))
                 })?;
         }
     }

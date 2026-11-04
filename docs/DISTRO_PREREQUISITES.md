@@ -35,25 +35,53 @@ A healthy host output will show all checks passing:
 
 ### Ubuntu 24.04 LTS (Noble Numbat) & Newer
 
-**The Issue**: Ubuntu 24.04 introduced a kernel patch restricting unprivileged user namespaces by default (`sysctl kernel.apparmor_restrict_unprivileged_userns=1`). Running `unshare(CLONE_NEWUSER)` without an AppArmor profile results in `Operation not permitted (os error 1)`.
+**The Issue**: Ubuntu 24.04 restricts unprivileged user namespace creation by default via AppArmor (`sysctl kernel.apparmor_restrict_unprivileged_userns=1`). Executing `unshare(CLONE_NEWUSER)` without a matching AppArmor profile results in `Operation not permitted (os error 1)`.
 
-**Recommended Fix (Scoped AppArmor Profile)**:
-Do **not** disable AppArmor systemwide. Instead, install the scoped ShadowCLI AppArmor profile which authorizes only `shadow` binaries:
+**Scoped AppArmor Profile (Preserves Systemwide Security)**:
+Never disable AppArmor systemwide or disable unprivileged userns restrictions globally. Instead, install the narrowly scoped ShadowCLI AppArmor profile which attaches specifically to `shadow` binaries (`/usr/local/bin/shadow`, `~/.cargo/bin/shadow`, and target directories):
 
 ```bash
 sudo bash scripts/setup_host_apparmor.sh
 ```
 
-Or manually:
+Or manually install and load the profile:
 ```bash
 sudo cp packaging/apparmor/shadow /etc/apparmor.d/shadow
 sudo apparmor_parser -r /etc/apparmor.d/shadow
 ```
 
-**Alternative (Temporary / Container Environments)**:
-```bash
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-```
+#### Reproducible Ubuntu 24.04 Verification Procedure
+To verify that ShadowCLI functions properly under active Ubuntu 24.04 userns restrictions without compromising host protections:
+
+1. Verify that the restriction is enabled:
+   ```bash
+   cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+   # Output must be: 1
+   ```
+2. Attempt running a command via an unprofiled test binary (e.g., standard `unshare -U true`) to verify the kernel enforces the restriction:
+   ```bash
+   unshare -U true
+   # Expected if unprofiled: unshare: unshare failed: Operation not permitted
+   ```
+3. Load the ShadowCLI AppArmor profile:
+   ```bash
+   sudo apparmor_parser -r /etc/apparmor.d/shadow
+   ```
+4. Verify AppArmor loaded the scoped profiles:
+   ```bash
+   sudo aa-status | grep shadow
+   # Output should list: shadow, shadow-cargo, shadow-user-cargo, shadow-target
+   ```
+5. Test ShadowCLI user execution as non-root user:
+   ```bash
+   shadow run -- echo "Sandbox operational"
+   # Output: Sandbox operational (exit code 0)
+   ```
+6. Run `shadow doctor` to confirm the host check passes:
+   ```bash
+   shadow doctor
+   # [PASS] Ubuntu 24.04 AppArmor: Profile active or unrestricted
+   ```
 
 ---
 

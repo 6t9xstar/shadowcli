@@ -176,7 +176,7 @@ if [ -n "$ORPHAN_COUNT" ]; then
 fi
 echo "  ✔ Passed: PID 1 supervisor reaped and terminated all background daemons."
 
-echo "[12/15] Testing Multiline Private Key Redaction..."
+echo "[12/18] Testing Multiline Private Key Redaction..."
 rm -rf "$TEST_DIR"/*
 echo "safe" > safe.txt
 "$SHADOW" run -- sh -c 'printf -- "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0m...\nSUPER_SECRET_PAYLOAD\n-----END RSA PRIVATE KEY-----\n" > app.rs'
@@ -194,7 +194,7 @@ else
     exit 1
 fi
 
-echo "[13/15] Testing Seccomp BPF Nested Namespace Denial (unshare deny)..."
+echo "[13/18] Testing Seccomp BPF Nested Namespace Denial (unshare deny)..."
 "$SHADOW" run -- python3 -c 'import ctypes; libc=ctypes.CDLL(None); res=libc.unshare(0x20000); print("unshare_res", res)' >/dev/null 2>&1
 LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
 STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
@@ -207,7 +207,7 @@ else
     exit 1
 fi
 
-echo "[14/15] Testing Parent Directory Symlink Escape Prevention..."
+echo "[14/18] Testing Parent Directory Symlink Escape Prevention..."
 rm -rf "$TEST_DIR"/*
 OUTSIDE_TARGET="/tmp/shadow_outside_target_$$"
 mkdir -p "$OUTSIDE_TARGET"
@@ -235,7 +235,7 @@ if [ $PARENT_SYM_EXIT -eq 0 ]; then
 fi
 echo "  ✔ Passed: Apply engine rejected parent directory symlink escape."
 
-echo "[15/16] Testing Landlock Sensitive Path Denial (Doctor Verification)..."
+echo "[15/18] Testing Landlock Sensitive Path Denial (Doctor Verification)..."
 DOCTOR_OUT=$("$SHADOW" doctor)
 if echo "$DOCTOR_OUT" | grep -q "Landlock LSM" && echo "$DOCTOR_OUT" | grep -q "PASS"; then
     echo "  ✔ Passed: Landlock LSM verified active and enforced."
@@ -245,7 +245,7 @@ else
     exit 1
 fi
 
-echo "[16/16] Testing Normal Supported Developer Workload Inside Sandbox..."
+echo "[16/18] Testing Normal Supported Developer Workload Inside Sandbox..."
 rm -rf "$TEST_DIR"/*
 echo 'fn main() { println!("Hello from sandbox"); }' > main.rs
 set +e
@@ -267,6 +267,69 @@ else
     exit 1
 fi
 
+echo "[17/18] Testing /dev/shm Isolation and Scoped Device Access..."
+SHM_CANARY="/dev/shm/shadow_canary_shm_$$"
+rm -f "$SHM_CANARY"
+
+# Inside sandbox: /dev/null, /dev/zero, /dev/urandom must work, /dev/shm writes succeed
+set +e
+"$SHADOW" run -- sh -c "echo 'DEV_NULL_OK' > /dev/null && head -c 8 /dev/urandom > /dev/null && head -c 8 /dev/zero > /dev/null && echo 'SHM_SECRET' > '$SHM_CANARY'"
+SHM_RUN_EXIT=$?
+set -e
+
+if [ $SHM_RUN_EXIT -ne 0 ]; then
+    echo "FAIL: Sandbox command writing to /dev/shm or reading /dev/null/zero/urandom failed (exit $SHM_RUN_EXIT)!"
+    exit 1
+fi
+
+# The file written inside sandbox /dev/shm MUST NOT exist on host /dev/shm
+if [ -f "$SHM_CANARY" ]; then
+    echo "FAIL: Host /dev/shm was polluted by sandbox execution ($SHM_CANARY exists on host)!"
+    rm -f "$SHM_CANARY"
+    exit 1
+fi
+
+# Verify writing directly to /dev root inside sandbox fails with permission denied
+set +e
+"$SHADOW" run -- touch /dev/shadow_malicious_device >/dev/null 2>&1
+DEV_TOUCH_EXIT=$?
+set -e
+
+if [ $DEV_TOUCH_EXIT -eq 0 ]; then
+    echo "FAIL: Writing to /dev root inside sandbox succeeded!"
+    exit 1
+fi
+echo "  ✔ Passed: /dev/shm isolated on private tmpfs; /dev root is read-only; character devices functional."
+
+echo "[18/18] Testing Package Cache Symlink Traversal Protection..."
+# Setup a cache symlink candidate pointing to sensitive host directory
+CACHE_BACKUP=""
+mkdir -p "$HOME/.cache"
+if [ -e "$HOME/.cache/pip" ] || [ -L "$HOME/.cache/pip" ]; then
+    CACHE_BACKUP="/tmp/shadow_pip_backup_$$"
+    mv "$HOME/.cache/pip" "$CACHE_BACKUP"
+fi
+
+# Create symlink ~/.cache/pip -> ~/.ssh
+ln -s "$HOME/.ssh" "$HOME/.cache/pip"
+
+set +e
+"$SHADOW" run -- cat "$HOME/.cache/pip/id_rsa" >/dev/null 2>&1
+CACHE_SYM_EXIT=$?
+set -e
+
+# Cleanup symlink and restore backup
+rm -f "$HOME/.cache/pip"
+if [ -n "$CACHE_BACKUP" ] && [ -e "$CACHE_BACKUP" ]; then
+    mv "$CACHE_BACKUP" "$HOME/.cache/pip"
+fi
+
+if [ $CACHE_SYM_EXIT -eq 0 ]; then
+    echo "FAIL: Package cache candidate symlink permitted accessing $HOME/.ssh/id_rsa!"
+    exit 1
+fi
+echo "  ✔ Passed: Symlinked package cache candidates rejected by O_NOFOLLOW / symlink_metadata."
+
 echo "============================================="
-echo "   ALL 16 ADVERSARIAL SECURITY TESTS PASSED  "
+echo "   ALL 18 ADVERSARIAL SECURITY TESTS PASSED  "
 echo "============================================="

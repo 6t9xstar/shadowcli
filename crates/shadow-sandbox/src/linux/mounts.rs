@@ -41,14 +41,17 @@ pub fn configure_mount_namespace(
                     let mut cache_fds = Vec::new();
                     for rel in &cache_candidates {
                         let full = home_path.join(rel);
-                        if full.is_dir() {
-                            if let Ok(c_path) = CString::new(full.to_str().unwrap_or_default()) {
-                                let fd = libc::open(
-                                    c_path.as_ptr(),
-                                    libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
-                                );
-                                if fd >= 0 {
-                                    cache_fds.push((*rel, fd));
+                        // Verify candidate is a physical directory and NOT a symlink (prevent traversal)
+                        if let Ok(meta) = std::fs::symlink_metadata(&full) {
+                            if meta.is_dir() && !meta.file_type().is_symlink() {
+                                if let Ok(c_path) = CString::new(full.to_str().unwrap_or_default()) {
+                                    let fd = libc::open(
+                                        c_path.as_ptr(),
+                                        libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                                    );
+                                    if fd >= 0 {
+                                        cache_fds.push((*rel, fd));
+                                    }
                                 }
                             }
                         }
@@ -127,6 +130,29 @@ pub fn configure_mount_namespace(
                 let err = std::io::Error::last_os_error();
                 return Err(SandboxError::Namespace(format!(
                     "Failed to mount private /tmp: {err}"
+                )));
+            }
+        }
+
+        // 3b. Mount private tmpfs over /dev/shm to prevent host shared-memory pollution
+        let shm_path = Path::new("/dev/shm");
+        if shm_path.exists() && project_root != shm_path {
+            let c_shm = CString::new("/dev/shm").map_err(|e| SandboxError::Namespace(e.to_string()))?;
+            let c_tmpfs =
+                CString::new("tmpfs").map_err(|e| SandboxError::Namespace(e.to_string()))?;
+            let c_shm_opts =
+                CString::new("mode=1777").map_err(|e| SandboxError::Namespace(e.to_string()))?;
+            let ret = libc::mount(
+                c_tmpfs.as_ptr(),
+                c_shm.as_ptr(),
+                c_tmpfs.as_ptr(),
+                0,
+                c_shm_opts.as_ptr() as *const libc::c_void,
+            );
+            if ret != 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(SandboxError::Namespace(format!(
+                    "Failed to mount private /dev/shm: {err}"
                 )));
             }
         }
