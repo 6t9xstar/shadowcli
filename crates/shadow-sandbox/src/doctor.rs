@@ -124,6 +124,26 @@ pub fn run_doctor(probe_path: &Path) -> DoctorReport {
             });
         }
 
+        // 3b. Debian unprivileged_userns_clone check (if sysctl exists)
+        if let Ok(deb_userns) = std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone") {
+            let val = deb_userns.trim();
+            if val == "0" {
+                probes.push(ProbeResult {
+                    name: "Debian User Namespaces (unprivileged_userns_clone)".to_string(),
+                    status: ProbeStatus::Fail,
+                    message: "kernel.unprivileged_userns_clone = 0 (Debian restricts unprivileged user namespaces)".to_string(),
+                    fix: Some("Run: sudo sysctl -w kernel.unprivileged_userns_clone=1".to_string()),
+                });
+            } else {
+                probes.push(ProbeResult {
+                    name: "Debian User Namespaces (unprivileged_userns_clone)".to_string(),
+                    status: ProbeStatus::Pass,
+                    message: "kernel.unprivileged_userns_clone = 1".to_string(),
+                    fix: None,
+                });
+            }
+        }
+
         // 4. Ubuntu 24.04 AppArmor unprivileged userns check
         let apparmor_restrict =
             std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
@@ -135,7 +155,7 @@ pub fn run_doctor(probe_path: &Path) -> DoctorReport {
                 name: "Ubuntu 24.04 AppArmor Restriction".to_string(),
                 status: ProbeStatus::Warn,
                 message: "kernel.apparmor_restrict_unprivileged_userns is enabled".to_string(),
-                fix: Some("Install packaging/apparmor/shadow or run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0".to_string()),
+                fix: Some("Run: sudo bash scripts/setup_host_apparmor.sh or sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0".to_string()),
             });
         } else {
             probes.push(ProbeResult {

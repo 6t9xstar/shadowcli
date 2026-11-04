@@ -24,11 +24,37 @@ pub fn configure_mount_namespace(
             )));
         }
 
-        // 2. Mask $HOME with an empty tmpfs if not explicitly permitted
+        // 2. Mask $HOME with a private tmpfs while preserving read-only access to package caches
         if !allow_host_home {
             if let Ok(home) = std::env::var("HOME") {
                 let home_path = Path::new(&home);
                 if home_path.exists() && project_root != home_path {
+                    // Open O_PATH descriptors for existing host package caches before masking $HOME
+                    let cache_candidates = [
+                        ".cargo/registry",
+                        ".cargo/git",
+                        ".rustup",
+                        ".npm",
+                        ".cache/pip",
+                        ".cache/go-build",
+                    ];
+                    let mut cache_fds = Vec::new();
+                    for rel in &cache_candidates {
+                        let full = home_path.join(rel);
+                        if full.is_dir() {
+                            if let Ok(c_path) = CString::new(full.to_str().unwrap_or_default()) {
+                                let fd = libc::open(
+                                    c_path.as_ptr(),
+                                    libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                                );
+                                if fd >= 0 {
+                                    cache_fds.push((*rel, fd));
+                                }
+                            }
+                        }
+                    }
+
+                    // Mount private tmpfs over $HOME
                     let c_home = CString::new(home.as_str())
                         .map_err(|e| SandboxError::Namespace(e.to_string()))?;
                     let c_tmpfs = CString::new("tmpfs")
@@ -43,10 +69,41 @@ pub fn configure_mount_namespace(
                         c_opts.as_ptr() as *const libc::c_void,
                     );
                     if ret != 0 {
+                        for (_, fd) in cache_fds {
+                            libc::close(fd);
+                        }
                         let err = std::io::Error::last_os_error();
                         return Err(SandboxError::Namespace(format!(
                             "Failed to mask HOME directory '{home}': {err}"
                         )));
+                    }
+
+                    // Re-bind package caches inside the new $HOME tmpfs as strictly read-only
+                    for (rel, fd) in cache_fds {
+                        let dest_dir = home_path.join(rel);
+                        if std::fs::create_dir_all(&dest_dir).is_ok() {
+                            if let Ok(c_dest) = CString::new(dest_dir.to_str().unwrap_or_default()) {
+                                let proc_src = format!("/proc/self/fd/{fd}\0");
+                                let bind_ret = libc::mount(
+                                    proc_src.as_ptr() as *const libc::c_char,
+                                    c_dest.as_ptr(),
+                                    std::ptr::null(),
+                                    libc::MS_BIND | libc::MS_REC,
+                                    std::ptr::null(),
+                                );
+                                if bind_ret == 0 {
+                                    // Remount read-only
+                                    libc::mount(
+                                        std::ptr::null(),
+                                        c_dest.as_ptr(),
+                                        std::ptr::null(),
+                                        libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
+                                        std::ptr::null(),
+                                    );
+                                }
+                            }
+                        }
+                        libc::close(fd);
                     }
                 }
             }

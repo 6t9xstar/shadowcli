@@ -49,6 +49,30 @@ impl FileChange {
             || path_str == "shadow.toml"
             || path_str.starts_with(".shadow")
     }
+
+    pub fn is_disposable_build_artifact(path: &Path) -> bool {
+        let path_str = path.to_string_lossy().replace('\\', "/");
+        let lower = path_str.to_lowercase();
+
+        let starts_with_dir = |dir: &str| {
+            lower == dir || lower.starts_with(&format!("{dir}/"))
+        };
+
+        starts_with_dir(".git")
+            || starts_with_dir("target")
+            || starts_with_dir("node_modules")
+            || starts_with_dir("__pycache__")
+            || starts_with_dir(".pytest_cache")
+            || starts_with_dir(".mypy_cache")
+            || starts_with_dir(".ruff_cache")
+            || starts_with_dir(".next")
+            || starts_with_dir(".turbo")
+            || starts_with_dir(".gradle")
+            || lower.contains("/__pycache__/")
+            || lower.ends_with("/__pycache__")
+            || lower.ends_with(".pyc")
+            || lower.ends_with(".pyo")
+    }
 }
 
 pub fn is_binary_content(sample: &[u8]) -> bool {
@@ -228,6 +252,11 @@ pub fn classify_changes(
             Ok(p) => p.to_path_buf(),
             Err(_) => continue,
         };
+
+        // Filter out internal VCS metadata and disposable compiler build artifacts
+        if FileChange::is_disposable_build_artifact(&rel_path) {
+            continue;
+        }
 
         // Check if this is an OverlayFS whiteout (deleted file or directory)
         if is_overlay_whiteout(upper_path) {
@@ -726,5 +755,22 @@ mod tests {
         let h1 = compute_review_hash(&[c1.clone(), c2.clone()]);
         let h2 = compute_review_hash(&[c2, c1]);
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_is_disposable_build_artifact() {
+        assert!(FileChange::is_disposable_build_artifact(Path::new("target/debug/app")));
+        assert!(FileChange::is_disposable_build_artifact(Path::new("node_modules/express/index.js")));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(".git/index")));
+        assert!(FileChange::is_disposable_build_artifact(Path::new(".git/logs/HEAD")));
+        assert!(FileChange::is_disposable_build_artifact(Path::new("app/__pycache__/app.cpython-310.pyc")));
+        assert!(FileChange::is_disposable_build_artifact(Path::new("script.pyc")));
+
+        // Legitimate source code files must NOT be marked as disposable artifacts
+        assert!(!FileChange::is_disposable_build_artifact(Path::new("src/main.rs")));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new("Cargo.toml")));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new("package.json")));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new("build.rs")));
+        assert!(!FileChange::is_disposable_build_artifact(Path::new(".env")));
     }
 }

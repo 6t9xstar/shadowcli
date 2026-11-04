@@ -81,6 +81,7 @@ impl Default for ShadowPolicy {
                     "/etc".to_string(),
                     "/opt".to_string(),
                     "/proc".to_string(),
+                    "/dev".to_string(),
                 ],
                 runtime_home_paths: vec![
                     ".cargo".to_string(),

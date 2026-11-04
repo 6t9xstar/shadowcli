@@ -138,6 +138,33 @@ pub fn apply_landlock_restrictions(
         }
     }
 
+    // 1b. Allow Read on mounted package caches under $HOME if present
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = Path::new(&home);
+        let cache_candidates = [
+            ".cargo/registry",
+            ".cargo/git",
+            ".rustup",
+            ".npm",
+            ".cache/pip",
+            ".cache/go-build",
+        ];
+        for rel in &cache_candidates {
+            let cache_dir = home_path.join(rel);
+            if cache_dir.exists() {
+                if let Ok(fd) = PathFd::new(&cache_dir) {
+                    ruleset = ruleset
+                        .add_rule(PathBeneath::new(fd, read_exec_access))
+                        .map_err(|e| {
+                            SandboxError::Landlock(format!(
+                                "Failed to add Landlock rule for package cache {rel}: {e}"
+                            ))
+                        })?;
+                }
+            }
+        }
+    }
+
     // 2. Allow Read + Write on project directory (MANDATORY)
     let all_fs_access = AccessFs::from_all(abi);
     let proj_fd = PathFd::new(project_root).map_err(|e| {
@@ -166,6 +193,19 @@ pub fn apply_landlock_restrictions(
         .map_err(|e| {
             SandboxError::Landlock(format!("Failed to add Landlock rule for /tmp: {e}"))
         })?;
+
+    // 3b. Allow Read + Write on /dev (MANDATORY for /dev/null, /dev/zero, /dev/urandom)
+    let dev_path = Path::new("/dev");
+    if dev_path.exists() {
+        if let Ok(dev_fd) = PathFd::new(dev_path) {
+            let dev_access = AccessFs::from_read(abi) | AccessFs::from_write(abi);
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(dev_fd, dev_access))
+                .map_err(|e| {
+                    SandboxError::Landlock(format!("Failed to add Landlock rule for /dev: {e}"))
+                })?;
+        }
+    }
 
     // 4. Restrict current process (MANDATORY)
     let status = ruleset

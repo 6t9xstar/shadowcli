@@ -23,6 +23,8 @@
   <a href="#-architecture--isolation">Architecture</a> •
   <a href="#-command-reference">Commands</a> •
   <a href="#-security-guarantees">Security Guarantees</a> •
+  <a href="docs/THREAT_MODEL.md">Threat Model</a> •
+  <a href="docs/DISTRO_PREREQUISITES.md">Distro Setup</a> •
   <a href="#-support--sponsorship">Sponsor</a>
 </p>
 
@@ -31,7 +33,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Operational Boundary Notice:** ShadowCLI protects commands routed through its execution interface (`shadow run`, `shadow mcp`). Native file editing and other operations outside that interface (such as Claude Code's native `Edit` and `Write` tools) are not automatically contained.
+> **Operational Boundary Notice:** ShadowCLI protects commands routed through its execution interface (`shadow run`, `shadow mcp`). Native file editing and other operations outside that interface (such as Claude Code's native `Edit` and `Write` tools, or browser/desktop automation actions) are not automatically contained. See [Threat Model & Security Boundaries](docs/THREAT_MODEL.md) and [Linux Distro Prerequisites](docs/DISTRO_PREREQUISITES.md) for complete details.
 
 ## 📌 What is ShadowCLI?
 
