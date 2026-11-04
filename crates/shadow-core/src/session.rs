@@ -202,7 +202,7 @@ impl SessionStore {
             }
         }
 
-        list.sort_by_key(|a| std::cmp::Reverse(a.created_at_unix_sec));
+        list.sort_by_key(|a| std::cmp::Reverse(a.id));
         Ok(list)
     }
 

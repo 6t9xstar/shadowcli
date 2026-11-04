@@ -98,6 +98,7 @@ if [ -e "$TEST_DIR/rel_escape" ] || [ -L "$TEST_DIR/rel_escape" ]; then
     echo "FAIL: rel_escape symlink was created on host!"
     exit 1
 fi
+"$SHADOW" discard || true
 echo "✔ Symlink path traversal blocked cleanly."
 
 echo "=== Test 3: Protected Path Enforcement ==="
