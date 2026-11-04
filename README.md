@@ -1,5 +1,9 @@
 <div align="center">
 
+<img src="assets/shadowcli-banner.png" alt="ShadowCLI — Zero-Trust Execution Layer for AI Coding Agents" width="100%" />
+
+<br/><br/>
+
 # ⚡ ShadowCLI
 
 ### *The Zero-Trust Execution Layer for AI Coding Agents*
