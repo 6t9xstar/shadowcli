@@ -13,6 +13,12 @@ pub fn filter_environment(
         }
     }
 
+    for env_str in explicit_env {
+        if let Some((k, v)) = env_str.split_once('=') {
+            filtered.insert(k.to_string(), v.to_string());
+        }
+    }
+
     // Ensure HOME and PATH have safe fallbacks if missing
     filtered.entry("PATH".to_string()).or_insert_with(|| {
         "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string()

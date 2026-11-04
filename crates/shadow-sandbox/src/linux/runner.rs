@@ -1,9 +1,11 @@
-use crate::error::{Result, SandboxError};
-use crate::linux::env::filter_environment;
-use shadow_core::{SessionBackend, SessionMeta, SessionPaths, ShadowPolicy};
 use std::fs::File;
 use std::path::Path;
 use std::process::{Command, Stdio};
+
+use shadow_core::{SessionBackend, SessionMeta, SessionPaths, ShadowPolicy};
+
+use crate::error::{Result, SandboxError};
+use crate::linux::env::filter_environment;
 
 pub struct SandboxRunner;
 
@@ -24,8 +26,10 @@ impl SandboxRunner {
         paths: &SessionPaths,
         meta: &SessionMeta,
         policy: &ShadowPolicy,
+        timeout: u64,
+        explicit_env: &[String],
     ) -> Result<i32> {
-        let env_vars = filter_environment(policy, &[]);
+        let env_vars = filter_environment(policy, explicit_env);
 
         let stdout_file = File::create(&paths.stdout_file)?;
         let stderr_file = File::create(&paths.stderr_file)?;
@@ -51,8 +55,28 @@ impl SandboxRunner {
                 ))
             })?;
 
-            let status = child.wait()?;
-            let code = status.code().unwrap_or(1);
+            let start = std::time::Instant::now();
+            let timeout_dur = std::time::Duration::from_secs(timeout);
+
+            let code = loop {
+                match child.try_wait()? {
+                    Some(status) => {
+                        break status.code().unwrap_or(1);
+                    }
+                    None => {
+                        if timeout > 0 && start.elapsed() >= timeout_dur {
+                            eprintln!(
+                                "\n✖ Command timed out after {}s (terminated by SIGKILL).",
+                                timeout
+                            );
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break 124;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                }
+            };
 
             // Populate session upper directory with candidate changes by comparing copy_root to project_root
             self.harvest_copy_changes(&copy_root, &paths.upper_dir)?;
@@ -110,8 +134,28 @@ impl SandboxRunner {
             SandboxError::Process(format!("Failed to spawn sandboxed process: {e}"))
         })?;
 
-        let status = child.wait()?;
-        let code = status.code().unwrap_or(1);
+        let start = std::time::Instant::now();
+        let timeout_dur = std::time::Duration::from_secs(timeout);
+
+        let code = loop {
+            match child.try_wait()? {
+                Some(status) => {
+                    break status.code().unwrap_or(1);
+                }
+                None => {
+                    if timeout > 0 && start.elapsed() >= timeout_dur {
+                        eprintln!(
+                            "\n✖ Command timed out after {}s (terminated by SIGKILL).",
+                            timeout
+                        );
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break 124;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        };
 
         Ok(code)
     }

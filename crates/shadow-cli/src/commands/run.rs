@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 #[allow(clippy::too_many_arguments)]
 pub fn execute(
     allow_network: bool,
-    _shell: bool,
-    _timeout: u64,
-    _env_vars: Vec<String>,
+    shell: bool,
+    timeout: u64,
+    env_vars: Vec<String>,
     policy_path: Option<PathBuf>,
     fs_mode: FsMode,
     project_arg: Option<PathBuf>,
@@ -85,10 +85,15 @@ pub fn execute(
 
     // 4. Create Session
     let store = SessionStore::init_default()?;
+    let effective_cmd = if shell {
+        vec!["sh".to_string(), "-c".to_string(), cmd.join(" ")]
+    } else {
+        cmd.clone()
+    };
     let (mut meta, paths) = store.create_session(
         &project_root,
         backend,
-        cmd.clone(),
+        effective_cmd,
         &policy.name,
         allow_network || policy.isolation.allow_network,
     )?;
@@ -100,7 +105,7 @@ pub fn execute(
     );
     println!("  Project: {}", project_root.display());
     println!("  Backend: {:?}", backend);
-    println!("  Command: {}", cmd.join(" "));
+    println!("  Command: {}", meta.command.join(" "));
     println!(
         "  Network: {}",
         if meta.allow_network {
@@ -121,7 +126,7 @@ pub fn execute(
     meta.state = SessionState::Running;
     store.save_meta(&paths, &meta)?;
 
-    let exit_code = match runner.run(&project_root, &paths, &meta, &policy) {
+    let exit_code = match runner.run(&project_root, &paths, &meta, &policy, timeout, &env_vars) {
         Ok(code) => code,
         Err(e) => {
             meta.state = SessionState::Interrupted;
