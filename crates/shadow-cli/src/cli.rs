@@ -108,6 +108,10 @@ pub enum Commands {
         #[arg(long)]
         session: Option<String>,
 
+        /// Cryptographic SHA-256 hash of reviewed change manifest (required to apply changes)
+        #[arg(long)]
+        review_hash: Option<String>,
+
         /// Specific file paths to apply
         paths: Vec<PathBuf>,
     },
@@ -124,6 +128,16 @@ pub enum Commands {
         /// Output sessions as JSON
         #[arg(long)]
         json: bool,
+    },
+
+    /// Run Model Context Protocol (MCP) server over STDIO for Claude Code integration
+    Mcp,
+
+    /// Generate or inspect Claude Code integration configuration
+    ClaudeSetup {
+        /// Write configuration files directly to .mcp.json and .claude/settings.json
+        #[arg(long)]
+        write: bool,
     },
 
     /// Probe host environment, kernel, Landlock, seccomp, and filesystem capabilities

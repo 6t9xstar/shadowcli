@@ -146,6 +146,7 @@ fn apply_file_descriptor_relative(
     rel_path: &Path,
     src: &Path,
     clean_mode: u32,
+    expected_sha256: Option<&str>,
 ) -> Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
@@ -267,12 +268,38 @@ fn apply_file_descriptor_relative(
         bail!("Failed to create temporary file in target directory: {err}");
     }
 
-    // Stream copy from source file
+    // Stream copy from source file while computing SHA-256 to prevent TOCTOU modifications
     {
+        use sha2::{Digest, Sha256};
+        use std::io::{Read, Write};
         let mut infile = File::open(src)?;
         let mut outfile = unsafe { std::fs::File::from_raw_fd(temp_fd) };
-        std::io::copy(&mut infile, &mut outfile)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            let n = infile.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
+            outfile.write_all(&buffer[..n])?;
+        }
         outfile.sync_all()?;
+
+        if let Some(expected) = expected_sha256 {
+            let actual = format!("{:x}", hasher.finalize());
+            if actual != expected {
+                unsafe {
+                    libc::unlinkat(parent_fd, c_temp_name.as_ptr(), 0);
+                }
+                bail!(
+                    "TOCTOU violation: staged file '{}' was altered during apply (expected sha256 {}, got {})",
+                    rel_path.display(),
+                    expected,
+                    actual
+                );
+            }
+        }
     }
 
     // Atomic descriptor-relative rename: renameat(parent_fd, temp_name, parent_fd, filename)
@@ -301,12 +328,144 @@ fn apply_file_descriptor_relative(
     rel_path: &Path,
     src: &Path,
     _clean_mode: u32,
+    expected_sha256: Option<&str>,
+) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let dest = project_root.join(rel_path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let bytes = fs::read(src)?;
+    if let Some(expected) = expected_sha256 {
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != expected {
+            bail!(
+                "TOCTOU violation: staged file '{}' was altered during apply (expected sha256 {}, got {})",
+                rel_path.display(),
+                expected,
+                actual
+            );
+        }
+    }
+    fs::write(&dest, &bytes)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn apply_symlink_descriptor_relative(
+    project_root: &Path,
+    rel_path: &Path,
+    target: &Path,
+) -> Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+
+    let canonical_proj = project_root
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("Failed to canonicalize project root: {e}"))?;
+
+    let c_root = CString::new(canonical_proj.as_os_str().as_bytes())?;
+    let mut current_fd = unsafe {
+        libc::open(
+            c_root.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if current_fd < 0 {
+        bail!("Failed to open project root directory descriptor");
+    }
+
+    if let Some(parent) = rel_path.parent() {
+        for comp in parent.components() {
+            match comp {
+                Component::Normal(part) => {
+                    let c_part = CString::new(part.as_bytes())?;
+                    unsafe {
+                        libc::mkdirat(current_fd, c_part.as_ptr(), 0o755);
+                    }
+
+                    let next_fd = unsafe {
+                        libc::openat(
+                            current_fd,
+                            c_part.as_ptr(),
+                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                        )
+                    };
+
+                    unsafe {
+                        libc::close(current_fd);
+                    }
+
+                    if next_fd < 0 {
+                        let err = std::io::Error::last_os_error();
+                        bail!(
+                            "Security violation: parent directory component '{}' cannot be opened safely: {err}",
+                            part.to_string_lossy()
+                        );
+                    }
+                    current_fd = next_fd;
+                }
+                Component::ParentDir => {
+                    unsafe {
+                        libc::close(current_fd);
+                    }
+                    bail!("Security violation: parent traversal component '..' detected");
+                }
+                Component::CurDir => {}
+                _ => {
+                    unsafe {
+                        libc::close(current_fd);
+                    }
+                    bail!("Security violation: invalid path component in relative path");
+                }
+            }
+        }
+    }
+
+    let parent_dir_file = unsafe { std::fs::File::from_raw_fd(current_fd) };
+    let parent_fd = parent_dir_file.as_raw_fd();
+
+    let filename = match rel_path.file_name() {
+        Some(f) => f,
+        None => bail!("Missing file name in relative path"),
+    };
+    let c_filename = CString::new(filename.as_bytes())?;
+    let c_target = CString::new(target.as_os_str().as_bytes())?;
+
+    // Unlink destination if it already exists
+    unsafe {
+        libc::unlinkat(parent_fd, c_filename.as_ptr(), 0);
+    }
+
+    // Atomic descriptor-relative symlink creation
+    let ret = unsafe { libc::symlinkat(c_target.as_ptr(), parent_fd, c_filename.as_ptr()) };
+    if ret != 0 {
+        let err = std::io::Error::last_os_error();
+        bail!(
+            "Failed to create descriptor-relative symlink '{}': {err}",
+            rel_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn apply_symlink_descriptor_relative(
+    project_root: &Path,
+    rel_path: &Path,
+    target: &Path,
 ) -> Result<()> {
     let dest = project_root.join(rel_path);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(src, &dest)?;
+    if dest.exists() || fs::symlink_metadata(&dest).is_ok() {
+        let _ = fs::remove_file(&dest);
+    }
     Ok(())
 }
 
@@ -362,12 +521,14 @@ impl Drop for ApplyLock {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     apply_all: bool,
     yes: bool,
     rollback: bool,
     force_protected: bool,
     session_id: Option<String>,
+    review_hash: Option<String>,
     explicit_paths: &[PathBuf],
     current_dir: &Path,
 ) -> Result<i32> {
@@ -408,6 +569,28 @@ pub fn execute(
         return Ok(0);
     }
 
+    if meta.state == SessionState::Failed {
+        bail!(
+            "Session {} failed during execution and cannot be applied.",
+            meta.id
+        );
+    }
+
+    if meta.state == SessionState::Running {
+        bail!(
+            "Session {} is still running and cannot be applied.",
+            meta.id
+        );
+    }
+
+    if meta.state != SessionState::Finished {
+        bail!(
+            "Session {} is in state {:?}; only Finished unapplied sessions can be applied.",
+            meta.id,
+            meta.state
+        );
+    }
+
     let manifest = ProjectManifest::load_from_file(&paths.manifest_file)?;
     let mut changes = classify_changes(
         &paths.upper_dir,
@@ -433,6 +616,34 @@ pub fn execute(
     if changes.is_empty() {
         println!("No eligible changes to apply.");
         return Ok(0);
+    }
+
+    // Cryptographic Review Hash Verification
+    // Prevents applying stale, altered, unreviewed, or post-review modified changes.
+    let current_review_hash = shadow_core::compute_review_hash(&changes);
+    let supplied_hash = match review_hash {
+        Some(h) if !h.trim().is_empty() => h.trim().to_lowercase(),
+        _ => {
+            bail!(
+                "Missing required --review-hash argument.\n\
+                 Security violation: Unreviewed changes cannot be applied without explicit review binding.\n\
+                 Inspect changes with 'shadow diff' and provide the cryptographic review hash:\n  \
+                 shadow apply --session {} --review-hash <HASH> --all --yes",
+                meta.id
+            );
+        }
+    };
+
+    if supplied_hash != current_review_hash.to_lowercase() {
+        bail!(
+            "Review hash mismatch!\n\
+             Supplied review hash: {}\n\
+             Current review hash:  {}\n\
+             Security violation: The session changes or manifest have diverged since diff review.\n\
+             Re-review the diff using 'shadow diff' before applying.",
+            supplied_hash,
+            current_review_hash
+        );
     }
 
     // Preflight conflict check
@@ -547,14 +758,27 @@ pub fn execute(
                     if let Some(target) = &change.symlink_target {
                         validate_symlink_target(&meta.project_path, &change.relative_path, target)?;
 
-                        if dest.exists() || fs::symlink_metadata(&dest).is_ok() {
-                            let _ = fs::remove_file(&dest);
+                        // TOCTOU check: verify symlink source exists and target in upper_dir did not mutate
+                        let current_target = fs::read_link(&src).map_err(|e| {
+                            anyhow::anyhow!(
+                                "TOCTOU violation: failed to read staged symlink '{}': {e}",
+                                src.display()
+                            )
+                        })?;
+                        if &current_target != target {
+                            bail!(
+                                "TOCTOU violation: staged symlink '{}' was modified during apply (target changed from '{}' to '{}')",
+                                change.relative_path.display(),
+                                target.display(),
+                                current_target.display()
+                            );
                         }
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::symlink;
-                            symlink(target, &dest)?;
-                        }
+
+                        apply_symlink_descriptor_relative(
+                            &meta.project_path,
+                            &change.relative_path,
+                            target,
+                        )?;
                         writeln!(journal_file, "SYMLINK:{}", change.relative_path.display())?;
                         println!(
                             "  {} Linked {}",
@@ -573,6 +797,7 @@ pub fn execute(
                             &change.relative_path,
                             &src,
                             clean_mode,
+                            change.new_sha256.as_deref(),
                         )?;
                         writeln!(journal_file, "APPLY:{}", change.relative_path.display())?;
                         println!(
@@ -794,7 +1019,7 @@ mod tests {
         fs::write(&src, "content").unwrap();
 
         let rel = Path::new("a/b/c/dest.txt");
-        assert!(apply_file_descriptor_relative(&proj, rel, &src, 0o4755).is_ok());
+        assert!(apply_file_descriptor_relative(&proj, rel, &src, 0o4755, None).is_ok());
 
         let written_dest = proj.join(rel);
         assert!(written_dest.exists());
@@ -827,9 +1052,117 @@ mod tests {
             symlink(&outside, proj.join("sym_dir")).unwrap();
 
             let rel = Path::new("sym_dir/evil.txt");
-            let res = apply_file_descriptor_relative(&proj, rel, &src, 0o644);
+            let res = apply_file_descriptor_relative(&proj, rel, &src, 0o644, None);
             assert!(res.is_err());
             assert!(!outside.join("evil.txt").exists());
+        }
+    }
+
+    #[test]
+    fn test_apply_file_descriptor_relative_toctou_content_hash_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let proj = temp.path().join("proj");
+        fs::create_dir_all(&proj).unwrap();
+
+        let src = temp.path().join("source.txt");
+        fs::write(&src, "real_content").unwrap();
+
+        let rel = Path::new("dest.txt");
+        // Pass wrong expected hash to simulate post-verification file alteration
+        let res = apply_file_descriptor_relative(
+            &proj,
+            rel,
+            &src,
+            0o644,
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        );
+        assert!(res.is_err());
+        assert!(!proj.join(rel).exists());
+
+        // Pass correct hash
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"real_content");
+        let correct_hash = format!("{:x}", hasher.finalize());
+        let res_ok = apply_file_descriptor_relative(&proj, rel, &src, 0o644, Some(&correct_hash));
+        assert!(res_ok.is_ok());
+        assert_eq!(fs::read_to_string(proj.join(rel)).unwrap(), "real_content");
+    }
+
+    #[test]
+    fn test_apply_symlink_descriptor_relative_nested_and_parent_symlink_escape() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let temp = tempfile::tempdir().unwrap();
+            let proj = temp.path().join("proj");
+            let outside = temp.path().join("outside");
+            fs::create_dir_all(&proj).unwrap();
+            fs::create_dir_all(&outside).unwrap();
+
+            let target = Path::new("relative/target.txt");
+            let rel = Path::new("sub/link.txt");
+            assert!(apply_symlink_descriptor_relative(&proj, rel, target).is_ok());
+
+            let created_link = proj.join(rel);
+            assert!(fs::symlink_metadata(&created_link)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert_eq!(fs::read_link(&created_link).unwrap(), target);
+
+            // Now test escaping parent component
+            symlink(&outside, proj.join("escape_sym")).unwrap();
+            let evil_rel = Path::new("escape_sym/evil_link.txt");
+            let evil_res = apply_symlink_descriptor_relative(&proj, evil_rel, target);
+            assert!(evil_res.is_err());
+            assert!(!outside.join("evil_link.txt").exists());
+        }
+    }
+
+    #[test]
+    fn test_symlink_target_validation_and_staged_toctou() {
+        let temp = tempfile::tempdir().unwrap();
+        let proj = temp.path().join("proj");
+        fs::create_dir_all(&proj).unwrap();
+
+        // 1. validate_symlink_target checks
+        let valid_target = Path::new("sub/file.txt");
+        assert!(validate_symlink_target(&proj, Path::new("my_link.txt"), valid_target).is_ok());
+
+        let escaping_rel_target = Path::new("../../outside.txt");
+        assert!(
+            validate_symlink_target(&proj, Path::new("sub/my_link.txt"), escaping_rel_target)
+                .is_err()
+        );
+
+        let absolute_target = Path::new("/etc/passwd");
+        assert!(validate_symlink_target(&proj, Path::new("my_link.txt"), absolute_target).is_err());
+
+        // 2. TOCTOU target mutation simulation
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let staged_dir = temp.path().join("upper");
+            fs::create_dir_all(&staged_dir).unwrap();
+            let staged_link = staged_dir.join("link.txt");
+            symlink(Path::new("target_v1.txt"), &staged_link).unwrap();
+
+            // When current_target on disk matches target from reviewed change
+            let expected_target = PathBuf::from("target_v1.txt");
+            let read_target = fs::read_link(&staged_link).unwrap();
+            assert_eq!(read_target, expected_target);
+
+            // If an adversary or concurrent process modifies the symlink target on disk
+            let _ = fs::remove_file(&staged_link);
+            symlink(Path::new("target_v2_tampered.txt"), &staged_link).unwrap();
+            let tampered_read = fs::read_link(&staged_link).unwrap();
+            assert_ne!(tampered_read, expected_target);
+
+            // If the symlink was replaced with a regular file
+            let _ = fs::remove_file(&staged_link);
+            fs::write(&staged_link, "not_a_symlink").unwrap();
+            assert!(fs::read_link(&staged_link).is_err());
         }
     }
 }

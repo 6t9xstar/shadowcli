@@ -129,12 +129,22 @@ pub fn execute(session_id: Option<String>, current_dir: &Path) -> Result<i32> {
     let mut apply_input = String::new();
     io::stdin().read_line(&mut apply_input)?;
     if apply_input.trim().eq_ignore_ascii_case("y") {
+        let approved_changes: Vec<_> = changes
+            .into_iter()
+            .filter(|c| {
+                approved_paths
+                    .iter()
+                    .any(|p| c.relative_path.starts_with(p))
+            })
+            .collect();
+        let computed_hash = shadow_core::compute_review_hash(&approved_changes);
         crate::commands::apply::execute(
             false,
             true,
             false,
             false,
             Some(meta.id.to_string()),
+            Some(computed_hash),
             &approved_paths,
             current_dir,
         )?;

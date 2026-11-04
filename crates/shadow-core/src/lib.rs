@@ -9,7 +9,7 @@ pub mod secret;
 pub mod session;
 
 pub use audit::{AuditLogger, AuditRecord};
-pub use change::{classify_changes, ChangeType, FileChange};
+pub use change::{classify_changes, compute_review_hash, ChangeType, FileChange};
 pub use diff::DiffRenderer;
 pub use error::{Result, ShadowError};
 pub use manifest::{FileRecord, ProjectManifest};

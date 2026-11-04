@@ -36,8 +36,15 @@ if [ -f added.txt ]; then
 fi
 echo "✔ Host remained unchanged after sandbox run."
 
-# Apply changes
-"$SHADOW" apply --all --yes
+# Review diff and extract cryptographic review hash
+REVIEW_HASH=$("$SHADOW" diff | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
+if [ -z "$REVIEW_HASH" ]; then
+    echo "FAIL: Could not extract review hash from diff!"
+    exit 1
+fi
+
+# Apply changes with review hash
+"$SHADOW" apply --all --yes --review-hash "$REVIEW_HASH"
 if [ "$(cat keep.txt)" != "v2_modified" ]; then
     echo "FAIL: keep.txt not updated after apply!"
     exit 1
@@ -52,7 +59,7 @@ if [ -f delete_me.txt ]; then
 fi
 echo "✔ Changes successfully applied transactionally."
 
-# Test rollback
+# Test rollback (rollback does not require review hash)
 "$SHADOW" apply --rollback
 if [ "$(cat keep.txt)" != "v1_original" ]; then
     echo "FAIL: keep.txt was not restored on rollback!"
@@ -78,9 +85,11 @@ echo "safe" > safe.txt
 "$SHADOW" run -- ln -s /etc/shadow evil_escape
 "$SHADOW" run -- ln -s ../../../../../etc/passwd rel_escape
 
+REVIEW_HASH=$("$SHADOW" diff | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
+
 # Attempting apply should refuse to create the escaping symlinks
 set +e
-"$SHADOW" apply --all --yes
+"$SHADOW" apply --all --yes --review-hash "$REVIEW_HASH"
 APPLY_EXIT=$?
 set -e
 
@@ -111,10 +120,11 @@ echo "SECRET_KEY=123" > .env
 
 # Agent modifies .env
 "$SHADOW" run -- sh -c 'echo "SECRET_KEY=HACKED" > .env'
+REVIEW_HASH=$("$SHADOW" diff | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 
 # Apply without --force-protected must fail
 set +e
-"$SHADOW" apply --all --yes
+"$SHADOW" apply --all --yes --review-hash "$REVIEW_HASH"
 PROTECTED_EXIT=$?
 set -e
 
@@ -130,7 +140,7 @@ fi
 echo "✔ Protected path prevented unconfirmed modification."
 
 # Apply with --force-protected should succeed
-"$SHADOW" apply --all --yes --force-protected
+"$SHADOW" apply --all --yes --force-protected --review-hash "$REVIEW_HASH"
 if [ "$(cat .env)" != "SECRET_KEY=HACKED" ]; then
     echo "FAIL: .env was not modified with --force-protected!"
     exit 1
@@ -144,10 +154,11 @@ cd "$TEST_DIR"
 
 echo "initial_a" > 01_file.txt
 "$SHADOW" run -- sh -c 'echo "modified_a" > 01_file.txt; ln -s /etc/shadow 99_evil_escape'
+REVIEW_HASH=$("$SHADOW" diff | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 
 # Apply should encounter evil_escape and fail, and automatically revert 01_file.txt
 set +e
-"$SHADOW" apply --all --yes
+"$SHADOW" apply --all --yes --review-hash "$REVIEW_HASH"
 FAIL_EXIT=$?
 set -e
 
@@ -169,16 +180,25 @@ cd "$TEST_DIR"
 echo "init" > doc.txt
 "$SHADOW" run -- sh -c 'echo "concurrent_mod" > doc.txt'
 MY_UID=$(id -u)
-LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
 SESSION_DIR="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION"
+
+REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 
 # Simulate concurrent process acquiring session flock
 exec 200>"$SESSION_DIR/apply.lock"
 flock -n 200
 
+# Test concurrent apply while lock is held
 set +e
-"$SHADOW" apply --session "$LATEST_SESSION" --all --yes 2>&1 | grep -q "Apply lock violation"
+"$SHADOW" apply --session "$LATEST_SESSION" --review-hash "$REVIEW_HASH" --all --yes 2>&1 | grep -q "Apply lock violation"
 LOCK_REJECTED=$?
+set -e
+
+# Test concurrent discard while lock is held
+set +e
+"$SHADOW" discard --session "$LATEST_SESSION" 2>&1 | grep -q "locked by an active apply"
+DISCARD_LOCKED=$?
 set -e
 
 # Release lock
@@ -190,12 +210,44 @@ if [ $LOCK_REJECTED -ne 0 ]; then
 fi
 echo "✔ Concurrent apply safely rejected while session lock was held."
 
+if [ $DISCARD_LOCKED -ne 0 ]; then
+    echo "FAIL: Concurrent discard was permitted while session apply lock was held!"
+    exit 1
+fi
+echo "✔ Concurrent discard safely rejected while session lock was held."
+
 # Now applying after lock release should succeed
-"$SHADOW" apply --session "$LATEST_SESSION" --all --yes >/dev/null 2>&1
+"$SHADOW" apply --session "$LATEST_SESSION" --review-hash "$REVIEW_HASH" --all --yes >/dev/null 2>&1
 if [ "$(cat doc.txt)" != "concurrent_mod" ]; then
     echo "FAIL: Apply failed after lock release!"
     exit 1
 fi
 echo "✔ Apply succeeded after session lock released."
+
+echo "=== Test 6: Automatic Rollback After Mid-Apply Validation Failure ==="
+rm -rf "$TEST_DIR"
+mkdir -p "$TEST_DIR"
+cd "$TEST_DIR"
+echo "baseline_data" > existing_doc.txt
+"$SHADOW" run -- sh -c 'echo "modified_data" > existing_doc.txt; ln -s /etc/passwd bad_symlink'
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
+
+set +e
+"$SHADOW" apply --session "$LATEST_SESSION" --review-hash "$REVIEW_HASH" --all --yes >/dev/null 2>&1
+FAILED_APPLY_EXIT=$?
+set -e
+
+if [ $FAILED_APPLY_EXIT -eq 0 ]; then
+    echo "FAIL: Apply should have failed due to invalid symlink!"
+    exit 1
+fi
+
+# Verify existing_doc.txt was restored to baseline_data by automatic rollback
+if [ "$(cat existing_doc.txt)" != "baseline_data" ]; then
+    echo "FAIL: Automatic rollback did not restore existing_doc.txt! Left as '$(cat existing_doc.txt)'"
+    exit 1
+fi
+echo "✔ Automatic rollback restored pre-apply baseline after failed apply."
 
 echo "=== ALL APPLY & ROLLBACK TESTS PASSED ==="

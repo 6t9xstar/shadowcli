@@ -36,7 +36,7 @@ echo "  ✔ Passed: Host credentials unreachable inside sandbox."
 
 echo "[2/12] Testing Host Process Isolation (PID Namespace)..."
 "$SHADOW" run -- ps aux >/dev/null 2>&1
-LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
 STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
 
 # ps aux output should only have header + PID 1 (internal-exec) + PID 2 (ps aux)
@@ -50,7 +50,7 @@ echo "  ✔ Passed: Host processes isolated (only PID 1 & 2 visible in sandbox).
 
 echo "[3/12] Testing Seccomp BPF Syscall Filter (ptrace deny)..."
 "$SHADOW" run -- python3 -c 'import ctypes; libc=ctypes.CDLL(None); res=libc.ptrace(0,0,0,0); print("ptrace_res", res)' >/dev/null 2>&1
-LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
 STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
 
 if grep -q "ptrace_res -1" "$STDOUT_LOG"; then
@@ -89,8 +89,9 @@ echo "[6/12] Testing SUID Bit Stripping on Apply..."
 rm -rf "$TEST_DIR"/*
 echo "safe" > safe.txt
 "$SHADOW" run -- sh -c 'echo "echo root" > backdoor.sh; chmod 4755 backdoor.sh'
-LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
-"$SHADOW" apply --session "$LATEST_SESSION" --all --yes
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
+"$SHADOW" apply --session "$LATEST_SESSION" --review-hash "$REVIEW_HASH" --all --yes
 
 # Check permissions of backdoor.sh on host
 HOST_MODE=$(stat -c "%a" backdoor.sh)
@@ -123,10 +124,11 @@ echo "[8/12] Testing Symlink Traversal Escape Prevention..."
 rm -rf "$TEST_DIR"/*
 echo "safe" > safe.txt
 "$SHADOW" run -- ln -s /etc/passwd escape_link
-LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 
 set +e
-"$SHADOW" apply --session "$LATEST_SESSION" --all --yes >/dev/null 2>&1
+"$SHADOW" apply --session "$LATEST_SESSION" --review-hash "$REVIEW_HASH" --all --yes >/dev/null 2>&1
 ESCAPE_EXIT=$?
 set -e
 
@@ -194,7 +196,7 @@ fi
 
 echo "[13/15] Testing Seccomp BPF Nested Namespace Denial (unshare deny)..."
 "$SHADOW" run -- python3 -c 'import ctypes; libc=ctypes.CDLL(None); res=libc.unshare(0x20000); print("unshare_res", res)' >/dev/null 2>&1
-LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
 STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
 
 if grep -q "unshare_res -1" "$STDOUT_LOG"; then
@@ -214,14 +216,15 @@ echo "base" > "$TEST_DIR/sub_dir/payload.txt"
 
 # Sandbox run modifying sub_dir/payload.txt
 "$SHADOW" run -- sh -c 'echo "evil" > sub_dir/payload.txt'
-LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+LATEST_SESSION=$(ls "/var/tmp/shadowcli-$MY_UID/sessions/" | sort | tail -n 1)
+REVIEW_HASH=$("$SHADOW" diff --session "$LATEST_SESSION" | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
 
 # Adversary replaces sub_dir with symlink pointing outside project before apply
 rm -rf "$TEST_DIR/sub_dir"
 ln -s "$OUTSIDE_TARGET" "$TEST_DIR/sub_dir"
 
 set +e
-"$SHADOW" apply --session "$LATEST_SESSION" --all --yes >/dev/null 2>&1
+"$SHADOW" apply --session "$LATEST_SESSION" --review-hash "$REVIEW_HASH" --all --yes >/dev/null 2>&1
 PARENT_SYM_EXIT=$?
 set -e
 

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::manifest::{compute_sha256, ProjectManifest, MAX_HASH_SIZE_BYTES};
+use crate::manifest::{compute_sha256, ProjectManifest};
 use crate::secret::is_sensitive_path;
 use crate::session::SessionBackend;
 
@@ -76,6 +76,87 @@ pub fn is_overlay_whiteout(path: &Path) -> bool {
         }
     }
     false
+}
+
+/// Normalizes a path to forward-slash separated representation, stripping redundant components.
+pub fn normalize_path_for_hash(path: &Path) -> String {
+    let mut parts = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::Normal(p) => parts.push(p.to_string_lossy().to_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => parts.push("..".to_string()),
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
+        }
+    }
+    parts.join("/")
+}
+
+/// Computes a canonical cryptographic review hash over all staged changes.
+///
+/// The hash deterministically covers:
+/// - Normalized relative paths (forward slashes, length-prefixed)
+/// - Change type (A, M, D, C, S, T)
+/// - Directory vs regular file vs symlink
+/// - Target of symlinks (length-prefixed)
+/// - Old and new file modes / permissions
+/// - Old and new file sizes
+/// - Old and new file content SHA-256 hashes
+pub fn compute_review_hash(changes: &[FileChange]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut sorted_changes = changes.to_vec();
+    sorted_changes.sort_by(|a, b| {
+        normalize_path_for_hash(&a.relative_path).cmp(&normalize_path_for_hash(&b.relative_path))
+    });
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"SHADOWCLI_CANONICAL_REVIEW_HASH_V1\n");
+    hasher.update((sorted_changes.len() as u64).to_le_bytes());
+
+    for c in &sorted_changes {
+        let norm_path = normalize_path_for_hash(&c.relative_path);
+        let path_bytes = norm_path.as_bytes();
+        hasher.update((path_bytes.len() as u64).to_le_bytes());
+        hasher.update(path_bytes);
+
+        let type_tag: u8 = match c.change_type {
+            ChangeType::Added => b'A',
+            ChangeType::Modified => b'M',
+            ChangeType::Deleted => b'D',
+            ChangeType::ModeChanged => b'C',
+            ChangeType::SymlinkCreated => b'S',
+            ChangeType::TypeChanged => b'T',
+        };
+        hasher.update([type_tag]);
+
+        hasher.update([if c.is_dir { 1u8 } else { 0u8 }]);
+        hasher.update([if c.is_symlink { 1u8 } else { 0u8 }]);
+
+        if let Some(target) = &c.symlink_target {
+            let norm_target = normalize_path_for_hash(target);
+            let target_bytes = norm_target.as_bytes();
+            hasher.update((target_bytes.len() as u64).to_le_bytes());
+            hasher.update(target_bytes);
+        } else {
+            hasher.update(0u64.to_le_bytes());
+        }
+
+        hasher.update(c.old_mode.unwrap_or(0).to_le_bytes());
+        hasher.update(c.new_mode.unwrap_or(0).to_le_bytes());
+        hasher.update(c.old_size.unwrap_or(0).to_le_bytes());
+        hasher.update(c.new_size.unwrap_or(0).to_le_bytes());
+
+        let old_hash = c.old_sha256.as_deref().unwrap_or("");
+        hasher.update((old_hash.len() as u64).to_le_bytes());
+        hasher.update(old_hash.as_bytes());
+
+        let new_hash = c.new_sha256.as_deref().unwrap_or("");
+        hasher.update((new_hash.len() as u64).to_le_bytes());
+        hasher.update(new_hash.as_bytes());
+    }
+
+    format!("{:x}", hasher.finalize())
 }
 
 /// Detects if a directory has the OverlayFS opaque extended attribute set.
@@ -248,14 +329,14 @@ pub fn classify_changes(
         let (new_sha256, is_binary) = if !is_dir && !is_symlink {
             if let Ok(bytes) = fs::read(upper_path) {
                 let bin = is_binary_content(&bytes);
-                let hash = if bytes.len() as u64 <= MAX_HASH_SIZE_BYTES {
-                    compute_sha256(upper_path).ok()
-                } else {
-                    None
-                };
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(&bytes);
+                let hash = Some(format!("{:x}", hasher.finalize()));
                 (hash, bin)
             } else {
-                (None, false)
+                let hash = compute_sha256(upper_path).ok();
+                (hash, false)
             }
         } else {
             (None, false)
@@ -429,5 +510,221 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].relative_path, PathBuf::from("delete_me.txt"));
         assert_eq!(changes[0].change_type, ChangeType::Deleted);
+    }
+
+    #[test]
+    fn test_compute_review_hash_determinism_and_sensitivity() {
+        let change1 = FileChange {
+            relative_path: PathBuf::from("src/main.rs"),
+            change_type: ChangeType::Modified,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: None,
+            old_size: Some(10),
+            new_size: Some(20),
+            old_mode: Some(0o644),
+            new_mode: Some(0o644),
+            old_sha256: Some("oldhash1".to_string()),
+            new_sha256: Some("newhash1".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+        let change2 = FileChange {
+            relative_path: PathBuf::from("README.md"),
+            change_type: ChangeType::Added,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: None,
+            old_size: None,
+            new_size: Some(100),
+            old_mode: None,
+            new_mode: Some(0o644),
+            old_sha256: None,
+            new_sha256: Some("readmeyeah".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+
+        let list_a = vec![change1.clone(), change2.clone()];
+        let list_b = vec![change2.clone(), change1.clone()]; // different order
+
+        let hash_a = compute_review_hash(&list_a);
+        let hash_b = compute_review_hash(&list_b);
+
+        // Determinism regardless of vector insertion order
+        assert_eq!(hash_a, hash_b);
+        assert_eq!(hash_a.len(), 64); // SHA-256 hex length
+
+        // Sensitive to content hash change
+        let mut change1_modified = change1.clone();
+        change1_modified.new_sha256 = Some("differenthash".to_string());
+        let hash_c = compute_review_hash(&[change1_modified, change2.clone()]);
+        assert_ne!(hash_a, hash_c);
+
+        // Sensitive to mode change
+        let mut change1_mode_change = change1.clone();
+        change1_mode_change.new_mode = Some(0o755);
+        let hash_d = compute_review_hash(&[change1_mode_change, change2.clone()]);
+        assert_ne!(hash_a, hash_d);
+
+        // Sensitive to old_mode change
+        let mut change1_old_mode = change1.clone();
+        change1_old_mode.old_mode = Some(0o700);
+        let hash_e = compute_review_hash(&[change1_old_mode, change2.clone()]);
+        assert_ne!(hash_a, hash_e);
+
+        // Sensitive to size change
+        let mut change1_size = change1.clone();
+        change1_size.new_size = Some(999);
+        let hash_f = compute_review_hash(&[change1_size, change2]);
+        assert_ne!(hash_a, hash_f);
+    }
+
+    #[test]
+    fn test_compute_review_hash_unambiguous_serialization_with_special_chars() {
+        // Test that special characters like colons, newlines, spaces do not cause delimiter collisions
+        let change_colon = FileChange {
+            relative_path: PathBuf::from("foo:bar"),
+            change_type: ChangeType::Added,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: None,
+            old_size: None,
+            new_size: Some(10),
+            old_mode: None,
+            new_mode: Some(0o644),
+            old_sha256: None,
+            new_sha256: Some("hash1".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+        let change_split = FileChange {
+            relative_path: PathBuf::from("foo"),
+            change_type: ChangeType::Added,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: Some(PathBuf::from("bar")),
+            old_size: None,
+            new_size: Some(10),
+            old_mode: None,
+            new_mode: Some(0o644),
+            old_sha256: None,
+            new_sha256: Some("hash1".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+
+        let hash_colon = compute_review_hash(&[change_colon]);
+        let hash_split = compute_review_hash(&[change_split]);
+        assert_ne!(hash_colon, hash_split);
+
+        // Test newline in path
+        let change_newline = FileChange {
+            relative_path: PathBuf::from("foo\nbar.txt"),
+            change_type: ChangeType::Modified,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: None,
+            old_size: Some(5),
+            new_size: Some(10),
+            old_mode: Some(0o644),
+            new_mode: Some(0o644),
+            old_sha256: Some("old".to_string()),
+            new_sha256: Some("new".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+        let hash_nl = compute_review_hash(&[change_newline]);
+        assert_eq!(hash_nl.len(), 64);
+        assert_ne!(hash_nl, hash_colon);
+    }
+
+    #[test]
+    fn test_compute_review_hash_covers_all_change_types_and_metadata() {
+        let base = FileChange {
+            relative_path: PathBuf::from("item"),
+            change_type: ChangeType::Added,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: None,
+            old_size: None,
+            new_size: Some(100),
+            old_mode: None,
+            new_mode: Some(0o644),
+            old_sha256: None,
+            new_sha256: Some("abc".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+
+        let mut hash_set = std::collections::HashSet::new();
+        hash_set.insert(compute_review_hash(std::slice::from_ref(&base)));
+
+        // Check every change type produces distinct hash
+        for ct in [
+            ChangeType::Modified,
+            ChangeType::Deleted,
+            ChangeType::ModeChanged,
+            ChangeType::SymlinkCreated,
+            ChangeType::TypeChanged,
+        ] {
+            let mut variant = base.clone();
+            variant.change_type = ct;
+            let h = compute_review_hash(&[variant]);
+            assert!(
+                hash_set.insert(h),
+                "Duplicate hash for change type {:?}",
+                ct
+            );
+        }
+
+        // Check is_dir
+        let mut dir_variant = base.clone();
+        dir_variant.is_dir = true;
+        assert!(hash_set.insert(compute_review_hash(&[dir_variant])));
+
+        // Check is_symlink and target
+        let mut sym_variant = base.clone();
+        sym_variant.is_symlink = true;
+        sym_variant.symlink_target = Some(PathBuf::from("target/path"));
+        assert!(hash_set.insert(compute_review_hash(&[sym_variant])));
+    }
+
+    #[test]
+    fn test_compute_review_hash_deterministic_cross_platform_ordering() {
+        let c1 = FileChange {
+            relative_path: PathBuf::from("a/b/c.txt"),
+            change_type: ChangeType::Added,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: None,
+            old_size: None,
+            new_size: Some(10),
+            old_mode: None,
+            new_mode: Some(0o644),
+            old_sha256: None,
+            new_sha256: Some("111".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+        let c2 = FileChange {
+            relative_path: PathBuf::from("x/y/z.txt"),
+            change_type: ChangeType::Modified,
+            is_dir: false,
+            is_symlink: false,
+            symlink_target: None,
+            old_size: Some(10),
+            new_size: Some(20),
+            old_mode: Some(0o644),
+            new_mode: Some(0o644),
+            old_sha256: Some("111".to_string()),
+            new_sha256: Some("222".to_string()),
+            is_binary: false,
+            is_sensitive: false,
+        };
+
+        let h1 = compute_review_hash(&[c1.clone(), c2.clone()]);
+        let h2 = compute_review_hash(&[c2, c1]);
+        assert_eq!(h1, h2);
     }
 }

@@ -13,7 +13,11 @@ fn main() -> ExitCode {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "shadow=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer().compact())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .compact(),
+        )
         .init();
 
     let cli = Cli::parse();
@@ -60,6 +64,7 @@ fn main() -> ExitCode {
             rollback,
             force_protected,
             session,
+            review_hash,
             paths,
         } => commands::apply::execute(
             all,
@@ -67,11 +72,14 @@ fn main() -> ExitCode {
             rollback,
             force_protected,
             session,
+            review_hash,
             &paths,
             &current_dir,
         ),
         Commands::Discard { session } => commands::discard::execute(session, &current_dir),
         Commands::Status { json } => commands::status::execute(json),
+        Commands::Mcp => commands::mcp::execute(&current_dir),
+        Commands::ClaudeSetup { write } => commands::claude_setup::execute(write, &current_dir),
         Commands::Doctor { path } => {
             let p = path.unwrap_or(current_dir);
             commands::doctor::execute(&p)

@@ -55,7 +55,8 @@ echo -e "\n[6] Re-running and applying changes..."
 "$SHADOW_BIN" run --project "$DEMO_DIR" -- sh -c 'echo MODIFIED > main.rs; rm .env; echo "feature_code" > src/feature.rs'
 
 echo -e "\n[7] Applying all changes to host..."
-"$SHADOW_BIN" apply --all --yes --force-protected
+REVIEW_HASH=$("$SHADOW_BIN" diff | grep -oE "Review Hash: [a-f0-9]{64}" | head -n 1 | awk '{print $3}')
+"$SHADOW_BIN" apply --all --yes --force-protected --review-hash "$REVIEW_HASH"
 
 echo -e "\n[8] Final Host Verification:"
 if [ "$(cat "$DEMO_DIR/main.rs")" = "MODIFIED" ]; then

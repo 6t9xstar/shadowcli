@@ -246,6 +246,29 @@ impl SessionStore {
     pub fn discard_session(&self, id: &Ulid) -> Result<()> {
         let paths = SessionPaths::new(&self.base_dir, id);
         if paths.root.exists() {
+            // Check if the session is currently locked by an active apply/rollback operation
+            let lock_path = paths.root.join("apply.lock");
+            #[cfg(unix)]
+            if lock_path.exists() {
+                use std::os::unix::io::AsRawFd;
+                if let Ok(file) = fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&lock_path)
+                {
+                    let fd = file.as_raw_fd();
+                    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+                    if ret != 0 {
+                        return Err(ShadowError::Session(format!(
+                            "Cannot discard session {id}: session is currently locked by an active apply or rollback operation."
+                        )));
+                    }
+                    unsafe {
+                        libc::flock(fd, libc::LOCK_UN);
+                    }
+                }
+            }
+
             // Under overlayfs, workdir may have mode 0000 directories, chmod before removal on unix
             #[cfg(unix)]
             {
