@@ -15,9 +15,9 @@
 <p align="center">
   <a href="#-quickstart">Quickstart</a> •
   <a href="#-why-shadowcli">Why ShadowCLI?</a> •
+  <a href="#-supported-ai-coding-agents">Supported Agents</a> •
   <a href="#-architecture--isolation">Architecture</a> •
   <a href="#-command-reference">Commands</a> •
-  <a href="#-agent-integrations">Agent Integrations</a> •
   <a href="#-security-guarantees">Security Guarantees</a> •
   <a href="#-support--sponsorship">Sponsor</a>
 </p>
@@ -281,39 +281,119 @@ ShadowCLI includes a rigorous automated adversarial test harness ([`tests/securi
 
 ---
 
-## 🤖 Agent Integrations
+## 🤖 Supported AI Coding Agents
 
-ShadowCLI is a drop-in execution wrapper for autonomous AI coding agents:
+ShadowCLI operates as an unprivileged, universal execution boundary. Any tool, script, or binary that spawns terminal commands or manipulates file trees runs seamlessly inside ShadowCLI.
 
-### Claude Code
-Wrap Claude Code's terminal execution:
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                   UNIVERSAL AI AGENT EXECUTION LAYER                   │
+│                                                                        │
+│   Claude Code • Cursor • Windsurf • Aider • OpenHands • Cline • Devin  │
+│   Google Antigravity • Gemini CLI • GitHub Copilot • Roo Code • Jules   │
+│                                  │                                     │
+│                                  ▼                                     │
+│                     ┌──────────────────────────┐                       │
+│                     │       shadow run         │                       │
+│                     └────────────┬─────────────┘                       │
+│                                  ▼                                     │
+│            [ Quarantined Sandbox + Ephemeral OverlayFS ]                │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🏆 Top 5 Best AI Coding Agents: Quickstart Integration
+
+#### 1. Claude Code (Anthropic)
+Anthropic's autonomous terminal coding agent executes system shell commands to inspect files, edit code, and run tests.
 ```bash
+# Run Claude Code in headless high-speed mode safely:
 shadow run --allow-network -- claude --dangerously-skip-permissions
 ```
-*Any modifications proposed by Claude Code will be held in sandbox quarantine for your review before touching your project files.*
+> **Why use ShadowCLI:** Claude Code can run with `--dangerously-skip-permissions` at full machine speed without risking your host machine. Your `~/.ssh/id_rsa`, `~/.aws/credentials`, and host `.env` files are masked, and changes are kept in quarantine until you run `shadow review`.
 
-### OpenHands / Custom Python Agents
+#### 2. Cursor & Windsurf (Agentic IDEs)
+Next-generation AI editors featuring agentic modes that generate and execute shell tasks, builds, and test commands.
+```bash
+# Wrap agent terminal tasks inside Cursor / Windsurf:
+shadow run --allow-network -- npm run build
+shadow run --allow-network -- pytest tests/
+```
+> **Why use ShadowCLI:** Prevents LLM hallucinations or prompt-injected packages from writing outside the project root or tampering with system binaries.
+
+#### 3. Aider (Paired AI Programming)
+The popular terminal pair programmer that edits code in local git repositories.
+```bash
+# Allow Aider to edit and refactor with automated approvals:
+shadow run --allow-network -- aider --yes-always
+```
+> **Why use ShadowCLI:** Lets Aider experiment freely. Inspect exact git diffs via `shadow diff`, view git diffstat with `shadow diff --stat`, and apply changes transactionally or revert with `shadow apply --rollback`.
+
+#### 4. OpenHands (Formerly OpenDevin)
+An open-source autonomous development agent platform designed to solve full GitHub issues and build software.
+```bash
+# Run OpenHands agents locally without Docker overhead:
+shadow run --allow-network -- poetry run python -m openhands.core.main
+```
+> **Why use ShadowCLI:** Eliminates the heavyweight Docker daemon requirement. Uses native Linux user namespaces and OverlayFS for microsecond startup times and zero-root privileges.
+
+#### 5. Cline & Roo Code / Google Antigravity & Gemini CLI
+Autonomous VS Code extensions and developer CLI agents capable of end-to-end task execution.
+```bash
+# Safely execute agent CLI commands:
+shadow run --allow-network -- gemini-cli "refactor auth service and run tests"
+```
+> **Why use ShadowCLI:** Strict defense-in-depth confinement via Landlock LSM and Seccomp BPF filters stops dangerous syscalls (`ptrace`, `kexec`, `bpf`) from affecting host processes.
+
+---
+
+### 🌐 Complete AI Coding Agent Compatibility Matrix
+
+ShadowCLI is thoroughly tested and compatible across the entire AI developer toolchain:
+
+| Category | Supported AI Coding Agents | Integration Mode |
+| :--- | :--- | :--- |
+| **Autonomous CLI Agents** | **Claude Code**, **Aider**, **OpenHands**, **Devin**, **SWE-agent**, **SWE-smith**, **Goose**, **Amp**, **Factory Droid**, **Kilo Code**, **Qwen Code**, **Qoder**, **Mistral Vibe**, **Pi Coding Agent**, **GPT Engineer**, **Plandex**, **GPT Pilot**, **Mentat**, **Smol Developer**, **Open Interpreter** | Direct CLI wrapper (`shadow run -- <agent>`) |
+| **Agentic IDEs & Editors** | **Cursor**, **Windsurf**, **Cline**, **Roo Code**, **GitHub Copilot**, **Continue**, **Tabby**, **Refact.ai**, **Zencoder**, **Blackbox AI**, **Augment Code**, **Sourcegraph Cody**, **Amazon Q Developer**, **CodeGPT** | Terminal task integration (`shadow run -- <cmd>`) |
+| **Next-Gen Agent Platforms**| **Google Antigravity**, **Gemini CLI**, **Jules**, **OpenCode**, **OpenAI Codex** | Workspace isolation wrapper (`shadow run --project <dir>`) |
+
+---
+
+### 🐍 Python & Custom Agent SDK Integration
+
+If you are building your own agent framework (using LangChain, LlamaIndex, AutoGen, CrewAI, or raw LLM function calling), wrap bash tool execution in one line:
+
 ```python
 import subprocess
 
-def run_agent_command(cmd: str, project_dir: str):
+def execute_sandboxed_command(command: str, project_dir: str = ".") -> subprocess.CompletedProcess:
+    """Executes an agent command safely inside the ShadowCLI zero-trust sandbox."""
     return subprocess.run(
-        ["shadow", "run", "--project", project_dir, "--", "sh", "-c", cmd],
+        ["shadow", "run", "--project", project_dir, "--allow-network", "--", "sh", "-c", command],
         capture_output=True,
         text=True,
     )
+
+# Example usage:
+result = execute_sandboxed_command("npm install && npm test", project_dir="/home/dev/project")
+print("Agent exit code:", result.returncode)
+print("Captured output:", result.stdout)
 ```
 
-### GitHub Actions / CI Automation
-ShadowCLI provides machine-readable output and non-interactive review flags for CI pipelines:
-```yaml
-- name: Run AI Agent Task in ShadowCLI
-  run: shadow run -- ./run_agent.sh
+---
 
-- name: Inspect Diff
+### 🔄 CI/CD & Headless Automation Workflow
+
+In headless CI pipelines or automated code evaluation environments:
+```yaml
+- name: Execute Autonomous Agent
+  run: shadow run --allow-network -- ./run_autonomous_agent.sh
+
+- name: Inspect Change Summary
   run: shadow diff --stat
 
-- name: Apply Changes Automatically
+- name: Transactionally Apply Approved Results
   run: shadow apply --all --yes
 ```
 
