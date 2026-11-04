@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document specifies the Model Context Protocol (MCP) integration between **ShadowCLI** and **Claude Code**. The integration provides Claude Code with a zero-trust, kernel-enforced execution sandbox (OverlayFS/CopyFS, Landlock LSM, Seccomp BPF, and isolated network namespaces) while enforcing a strict **developer-controlled terminal approval workflow** backed by cryptographic review hashing.
+This document specifies the Model Context Protocol (MCP) integration between **ShadowCLI** and **Claude Code**. Commands routed through ShadowCLI are executed in a zero-trust, kernel-enforced sandbox (OverlayFS/CopyFS, Landlock LSM, Seccomp BPF, and isolated network namespaces), staging all modifications while enforcing a strict **developer-controlled terminal approval workflow** backed by cryptographic review hashing.
 
 ---
 
