@@ -137,4 +137,29 @@ if [ "$(cat .env)" != "SECRET_KEY=HACKED" ]; then
 fi
 echo "✔ Protected path override with --force-protected succeeded."
 
+echo "=== Test 4: Automatic Transactional Rollback on Mid-Apply Failure ==="
+rm -rf "$TEST_DIR"
+mkdir -p "$TEST_DIR"
+cd "$TEST_DIR"
+
+echo "initial_a" > 01_file.txt
+"$SHADOW" run -- sh -c 'echo "modified_a" > 01_file.txt; ln -s /etc/shadow 99_evil_escape'
+
+# Apply should encounter evil_escape and fail, and automatically revert 01_file.txt
+set +e
+"$SHADOW" apply --all --yes
+FAIL_EXIT=$?
+set -e
+
+if [ $FAIL_EXIT -eq 0 ]; then
+    echo "FAIL: apply should have failed due to 99_evil_escape!"
+    exit 1
+fi
+
+if [ "$(cat 01_file.txt)" != "initial_a" ]; then
+    echo "FAIL: Automatic rollback failed! 01_file.txt was left dirty as '$(cat 01_file.txt)'"
+    exit 1
+fi
+echo "✔ Automatic rollback restored pre-apply baseline after validation error."
+
 echo "=== ALL APPLY & ROLLBACK TESTS PASSED ==="

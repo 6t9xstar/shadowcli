@@ -156,8 +156,10 @@ pub fn run_doctor(probe_path: &Path) -> DoctorReport {
         } else {
             probes.push(ProbeResult {
                 name: "Landlock LSM".to_string(),
-                status: ProbeStatus::Warn,
-                message: "Landlock is not available on this kernel".to_string(),
+                status: ProbeStatus::Fail,
+                message:
+                    "Landlock is not available on this kernel (mandatory for filesystem sandboxing)"
+                        .to_string(),
                 fix: Some(
                     "Enable CONFIG_SECURITY_LANDLOCK=y and add 'landlock' to lsm= boot param"
                         .to_string(),

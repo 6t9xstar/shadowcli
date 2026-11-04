@@ -59,8 +59,9 @@ impl ReviewState {
         for rel_path in approved_paths {
             let host_file = project_root.join(rel_path);
             let baseline_record = manifest.files.get(rel_path);
+            let host_file_present = fs::symlink_metadata(&host_file).is_ok();
 
-            match (baseline_record, host_file.exists()) {
+            match (baseline_record, host_file_present) {
                 (Some(rec), true) => {
                     let meta = fs::symlink_metadata(&host_file)?;
                     let current_size = meta.len();

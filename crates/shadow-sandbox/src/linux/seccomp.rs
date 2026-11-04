@@ -14,6 +14,8 @@ pub const DENIED_SYSCALLS: &[&str] = &[
     "umount2",
     "pivot_root",
     "setns",
+    "unshare",
+    "chroot",
     "keyctl",
     "add_key",
     "request_key",
@@ -32,6 +34,14 @@ pub const DENIED_SYSCALLS: &[&str] = &[
     "process_vm_writev",
     "syslog",
     "lookup_dcookie",
+    "acct",
+    "kcmp",
+    "fanotify_init",
+    "fanotify_mark",
+    "clock_settime",
+    "settimeofday",
+    "adjtimex",
+    "vmsplice",
 ];
 
 pub fn apply_seccomp_policy() -> Result<()> {
@@ -93,6 +103,23 @@ pub fn apply_seccomp_policy() -> Result<()> {
         k: 0, // offsetof(struct seccomp_data, nr)
     });
 
+    #[cfg(target_arch = "x86_64")]
+    {
+        // Mitigate x32 ABI bypass: reject any syscall with nr >= 0x40000000 (__X32_SYSCALL_BIT)
+        filter.push(libc::sock_filter {
+            code: 0x25, // BPF_JMP | BPF_JGE | BPF_K
+            jt: 0,      // if nr >= 0x40000000, jump to return EPERM
+            jf: 1,      // else skip return EPERM
+            k: 0x40000000,
+        });
+        filter.push(libc::sock_filter {
+            code: 0x06, // BPF_RET | BPF_K
+            jt: 0,
+            jf: 0,
+            k: 0x00050001, // SECCOMP_RET_ERRNO | (EPERM = 1)
+        });
+    }
+
     // Syscall numbers to deny on x86_64
     #[cfg(target_arch = "x86_64")]
     let denied_nrs = [
@@ -108,6 +135,8 @@ pub fn apply_seccomp_policy() -> Result<()> {
         libc::SYS_umount2,
         libc::SYS_pivot_root,
         308, // SYS_setns
+        libc::SYS_unshare,
+        libc::SYS_chroot,
         250, // SYS_keyctl
         248, // SYS_add_key
         249, // SYS_request_key
@@ -126,6 +155,14 @@ pub fn apply_seccomp_policy() -> Result<()> {
         311, // SYS_process_vm_writev
         103, // SYS_syslog
         212, // SYS_lookup_dcookie
+        libc::SYS_acct,
+        312, // SYS_kcmp
+        300, // SYS_fanotify_init
+        301, // SYS_fanotify_mark
+        libc::SYS_clock_settime,
+        libc::SYS_settimeofday,
+        libc::SYS_adjtimex,
+        libc::SYS_vmsplice,
     ];
 
     #[cfg(target_arch = "aarch64")]
@@ -142,6 +179,8 @@ pub fn apply_seccomp_policy() -> Result<()> {
         libc::SYS_umount2,
         libc::SYS_pivot_root,
         268, // SYS_setns
+        97,  // SYS_unshare
+        51,  // SYS_chroot
         219, // SYS_keyctl
         217, // SYS_add_key
         218, // SYS_request_key
@@ -158,6 +197,14 @@ pub fn apply_seccomp_policy() -> Result<()> {
         271, // SYS_process_vm_writev
         116, // SYS_syslog
         18,  // SYS_lookup_dcookie
+        89,  // SYS_acct
+        272, // SYS_kcmp
+        262, // SYS_fanotify_init
+        263, // SYS_fanotify_mark
+        112, // SYS_clock_settime
+        170, // SYS_settimeofday
+        171, // SYS_adjtimex
+        75,  // SYS_vmsplice
     ];
 
     // For each denied syscall, if equal, return SECCOMP_RET_ERRNO(EPERM = 1)

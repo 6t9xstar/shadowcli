@@ -23,6 +23,45 @@ fn get_landlock_abi() -> i32 {
     }
 }
 
+pub fn is_blocked_runtime_path(path: &Path) -> bool {
+    let p_str = path.to_string_lossy();
+    let normalized = p_str.replace('\\', "/");
+    let lower = normalized.to_lowercase();
+    let trimmed = lower.trim_end_matches('/');
+
+    if trimmed == "/root" || trimmed.starts_with("/root/") {
+        return true;
+    }
+    if trimmed == "/home" || trimmed == "/home/" {
+        return true;
+    }
+    if trimmed == "/etc/shadow"
+        || trimmed == "/etc/gshadow"
+        || trimmed == "/etc/sudoers"
+        || trimmed.starts_with("/etc/sudoers.d")
+        || trimmed == "/etc/security"
+    {
+        return true;
+    }
+    for seg in trimmed.split('/') {
+        if matches!(
+            seg,
+            ".ssh"
+                | ".aws"
+                | ".gnupg"
+                | ".docker"
+                | ".kube"
+                | "shadow"
+                | "id_rsa"
+                | "id_ed25519"
+                | "credentials"
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn apply_landlock_restrictions(
     project_root: &Path,
     runtime_paths: &[String],
@@ -53,16 +92,23 @@ pub fn apply_landlock_restrictions(
     let read_exec_access = AccessFs::from_read(abi);
     for p_str in runtime_paths {
         let p = Path::new(p_str);
+        if is_blocked_runtime_path(p) {
+            return Err(SandboxError::Landlock(format!(
+                "Security violation: runtime path '{p_str}' is sensitive and blocked from Landlock ruleset"
+            )));
+        }
+
         if p.exists() {
-            if let Ok(fd) = PathFd::new(p) {
-                ruleset = ruleset
-                    .add_rule(PathBeneath::new(fd, read_exec_access))
-                    .map_err(|e| {
-                        SandboxError::Landlock(format!(
-                            "Failed to add Landlock rule for {p_str}: {e}"
-                        ))
-                    })?;
-            }
+            let fd = PathFd::new(p).map_err(|e| {
+                SandboxError::Landlock(format!(
+                    "Failed to open descriptor for runtime path {p_str}: {e}"
+                ))
+            })?;
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(fd, read_exec_access))
+                .map_err(|e| {
+                    SandboxError::Landlock(format!("Failed to add Landlock rule for {p_str}: {e}"))
+                })?;
         }
     }
 
@@ -82,16 +128,18 @@ pub fn apply_landlock_restrictions(
 
     // 3. Allow Read + Write on /tmp (MANDATORY for sandboxed compilers/interpreters)
     let tmp_path = Path::new("/tmp");
-    if tmp_path.exists() {
-        let tmp_fd = PathFd::new(tmp_path).map_err(|e| {
-            SandboxError::Landlock(format!("Failed to open descriptor for /tmp: {e}"))
-        })?;
-        ruleset = ruleset
-            .add_rule(PathBeneath::new(tmp_fd, all_fs_access))
-            .map_err(|e| {
-                SandboxError::Landlock(format!("Failed to add Landlock rule for /tmp: {e}"))
-            })?;
+    if !tmp_path.exists() {
+        return Err(SandboxError::Landlock(
+            "Mandatory path /tmp does not exist".to_string(),
+        ));
     }
+    let tmp_fd = PathFd::new(tmp_path)
+        .map_err(|e| SandboxError::Landlock(format!("Failed to open descriptor for /tmp: {e}")))?;
+    ruleset = ruleset
+        .add_rule(PathBeneath::new(tmp_fd, all_fs_access))
+        .map_err(|e| {
+            SandboxError::Landlock(format!("Failed to add Landlock rule for /tmp: {e}"))
+        })?;
 
     // 4. Restrict current process (MANDATORY)
     let status = ruleset
@@ -106,4 +154,28 @@ pub fn apply_landlock_restrictions(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_blocked_runtime_paths() {
+        assert!(is_blocked_runtime_path(Path::new("/root")));
+        assert!(is_blocked_runtime_path(Path::new("/root/.bashrc")));
+        assert!(is_blocked_runtime_path(Path::new("/home")));
+        assert!(is_blocked_runtime_path(Path::new("/home/user/.ssh/id_rsa")));
+        assert!(is_blocked_runtime_path(Path::new("/etc/shadow")));
+        assert!(is_blocked_runtime_path(Path::new("/etc/sudoers")));
+        assert!(is_blocked_runtime_path(Path::new("/etc/sudoers.d/custom")));
+        assert!(is_blocked_runtime_path(Path::new(
+            "/var/data/.aws/credentials"
+        )));
+
+        assert!(!is_blocked_runtime_path(Path::new("/usr")));
+        assert!(!is_blocked_runtime_path(Path::new("/bin")));
+        assert!(!is_blocked_runtime_path(Path::new("/lib")));
+        assert!(!is_blocked_runtime_path(Path::new("/opt")));
+    }
 }

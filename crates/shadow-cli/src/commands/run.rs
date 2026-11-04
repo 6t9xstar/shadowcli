@@ -103,8 +103,16 @@ pub fn execute(
         "ShadowCLI Session:".bold(),
         meta.id.to_string().cyan().bold()
     );
+    let backend_desc = match backend {
+        SessionBackend::Overlay => {
+            "OverlayFS (Kernel CoW upperdir delta isolation; Landlock & Seccomp active)"
+        }
+        SessionBackend::Copy => {
+            "CopyFS (Namespace, Landlock, Seccomp, and PID 1 supervisor active; ephemeral workspace tracking)"
+        }
+    };
     println!("  Project: {}", project_root.display());
-    println!("  Backend: {:?}", backend);
+    println!("  Backend: {}", backend_desc.cyan());
     println!("  Command: {}", meta.command.join(" "));
     println!(
         "  Network: {}",

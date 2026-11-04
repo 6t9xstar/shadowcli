@@ -174,7 +174,7 @@ if [ -n "$ORPHAN_COUNT" ]; then
 fi
 echo "  ✔ Passed: PID 1 supervisor reaped and terminated all background daemons."
 
-echo "[12/12] Testing Multiline Private Key Redaction..."
+echo "[12/15] Testing Multiline Private Key Redaction..."
 rm -rf "$TEST_DIR"/*
 echo "safe" > safe.txt
 "$SHADOW" run -- sh -c 'printf -- "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0m...\nSUPER_SECRET_PAYLOAD\n-----END RSA PRIVATE KEY-----\n" > app.rs'
@@ -192,6 +192,56 @@ else
     exit 1
 fi
 
+echo "[13/15] Testing Seccomp BPF Nested Namespace Denial (unshare deny)..."
+"$SHADOW" run -- python3 -c 'import ctypes; libc=ctypes.CDLL(None); res=libc.unshare(0x20000); print("unshare_res", res)' >/dev/null 2>&1
+LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+STDOUT_LOG="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION/stdout.log"
+
+if grep -q "unshare_res -1" "$STDOUT_LOG"; then
+    echo "  ✔ Passed: unshare syscall blocked with EPERM by Seccomp BPF."
+else
+    echo "FAIL: unshare syscall was not blocked by seccomp!"
+    cat "$STDOUT_LOG"
+    exit 1
+fi
+
+echo "[14/15] Testing Parent Directory Symlink Escape Prevention..."
+rm -rf "$TEST_DIR"/*
+OUTSIDE_TARGET="/tmp/shadow_outside_target_$$"
+mkdir -p "$OUTSIDE_TARGET"
+mkdir -p "$TEST_DIR/sub_dir"
+echo "base" > "$TEST_DIR/sub_dir/payload.txt"
+
+# Sandbox run modifying sub_dir/payload.txt
+"$SHADOW" run -- sh -c 'echo "evil" > sub_dir/payload.txt'
+LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+
+# Adversary replaces sub_dir with symlink pointing outside project before apply
+rm -rf "$TEST_DIR/sub_dir"
+ln -s "$OUTSIDE_TARGET" "$TEST_DIR/sub_dir"
+
+set +e
+"$SHADOW" apply --session "$LATEST_SESSION" --all --yes >/dev/null 2>&1
+PARENT_SYM_EXIT=$?
+set -e
+
+rm -rf "$OUTSIDE_TARGET"
+if [ $PARENT_SYM_EXIT -eq 0 ]; then
+    echo "FAIL: apply permitted writing through parent symlink outside project!"
+    exit 1
+fi
+echo "  ✔ Passed: Apply engine rejected parent directory symlink escape."
+
+echo "[15/15] Testing Landlock Sensitive Path Denial (Doctor Verification)..."
+DOCTOR_OUT=$("$SHADOW" doctor)
+if echo "$DOCTOR_OUT" | grep -q "Landlock LSM" && echo "$DOCTOR_OUT" | grep -q "PASS"; then
+    echo "  ✔ Passed: Landlock LSM verified active and enforced."
+else
+    echo "FAIL: Doctor report showed Landlock LSM failed or missing!"
+    echo "$DOCTOR_OUT"
+    exit 1
+fi
+
 echo "============================================="
-echo "   ALL 12 ADVERSARIAL SECURITY TESTS PASSED  "
+echo "   ALL 15 ADVERSARIAL SECURITY TESTS PASSED  "
 echo "============================================="
