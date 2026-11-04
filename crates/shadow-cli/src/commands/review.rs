@@ -22,7 +22,12 @@ pub fn execute(session_id: Option<String>, current_dir: &Path) -> Result<i32> {
     };
 
     let manifest = ProjectManifest::load_from_file(&paths.manifest_file)?;
-    let changes = classify_changes(&paths.upper_dir, &manifest, &meta.project_path)?;
+    let changes = classify_changes(
+        &paths.upper_dir,
+        &manifest,
+        &meta.project_path,
+        meta.backend,
+    )?;
 
     if changes.is_empty() {
         println!("No changes captured in session {}.", meta.id);

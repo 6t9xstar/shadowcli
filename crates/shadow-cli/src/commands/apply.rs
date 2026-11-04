@@ -43,7 +43,12 @@ pub fn execute(
     }
 
     let manifest = ProjectManifest::load_from_file(&paths.manifest_file)?;
-    let mut changes = classify_changes(&paths.upper_dir, &manifest, &meta.project_path)?;
+    let mut changes = classify_changes(
+        &paths.upper_dir,
+        &manifest,
+        &meta.project_path,
+        meta.backend,
+    )?;
 
     if !explicit_paths.is_empty() {
         changes.retain(|c| {

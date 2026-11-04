@@ -18,6 +18,7 @@ similar = { version = "2.6", features = ["inline", "bytes"] }
 tracing = "0.1"
 walkdir = "2.5"
 libc = "0.2"
+regex = "1.10"
 
 [dev-dependencies]
 tempfile = "3.10"

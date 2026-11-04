@@ -5,6 +5,7 @@ pub mod error;
 pub mod manifest;
 pub mod policy;
 pub mod review;
+pub mod secret;
 pub mod session;
 
 pub use audit::{AuditLogger, AuditRecord};
@@ -14,6 +15,7 @@ pub use error::{Result, ShadowError};
 pub use manifest::{FileRecord, ProjectManifest};
 pub use policy::ShadowPolicy;
 pub use review::{ApproveDecision, ReviewState};
+pub use secret::{is_sensitive_path, redact_secrets};
 pub use session::{SessionBackend, SessionMeta, SessionPaths, SessionState, SessionStore};
 
 #[cfg(test)]

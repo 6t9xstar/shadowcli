@@ -142,7 +142,7 @@ pub fn execute(
     store.save_meta(&paths, &meta)?;
 
     // 7. Change summary
-    let changes = classify_changes(&paths.upper_dir, &manifest, &project_root)?;
+    let changes = classify_changes(&paths.upper_dir, &manifest, &project_root, meta.backend)?;
     let renderer = DiffRenderer::new(false);
 
     println!("\n{}", "Execution Complete".bold());

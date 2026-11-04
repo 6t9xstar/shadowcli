@@ -28,7 +28,12 @@ pub fn execute(
     };
 
     let manifest = ProjectManifest::load_from_file(&paths.manifest_file)?;
-    let mut changes = classify_changes(&paths.upper_dir, &manifest, &meta.project_path)?;
+    let mut changes = classify_changes(
+        &paths.upper_dir,
+        &manifest,
+        &meta.project_path,
+        meta.backend,
+    )?;
 
     if !path_filters.is_empty() {
         changes.retain(|c| path_filters.iter().any(|f| c.relative_path.starts_with(f)));
@@ -42,7 +47,10 @@ pub fn execute(
     let renderer = DiffRenderer::new(show_sensitive);
 
     if stat_only {
-        println!("{}", renderer.render_summary(&changes));
+        print!(
+            "{}",
+            renderer.render_diffstat(&changes, &meta.project_path, &paths.upper_dir)
+        );
         return Ok(0);
     }
 
@@ -58,7 +66,21 @@ pub fn execute(
     );
     for change in &changes {
         let diff_text = renderer.render_change(change, &meta.project_path, &paths.upper_dir)?;
-        print!("{diff_text}");
+        for line in diff_text.lines() {
+            if line.starts_with('+') && !line.starts_with("+++") {
+                println!("{}", line.green());
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                println!("{}", line.red());
+            } else if line.starts_with("@@") {
+                println!("{}", line.cyan());
+            } else if line.starts_with("diff --") {
+                println!("{}", line.bold());
+            } else if line.starts_with("[REDACTED") {
+                println!("{}", line.yellow().bold());
+            } else {
+                println!("{line}");
+            }
+        }
     }
 
     Ok(0)
