@@ -29,6 +29,13 @@ pub enum SandboxError {
     #[error("Unsupported platform: {0}")]
     UnsupportedPlatform(String),
 
+    #[error("CopyFS capture failed at '{path}': {operation} failed: {source}")]
+    CopyFsCapture {
+        path: std::path::PathBuf,
+        operation: &'static str,
+        source: std::io::Error,
+    },
+
     #[error("Probe failed: {0}")]
     ProbeFailed(String),
 }

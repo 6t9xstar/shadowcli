@@ -232,7 +232,7 @@ if [ $PARENT_SYM_EXIT -eq 0 ]; then
 fi
 echo "  ✔ Passed: Apply engine rejected parent directory symlink escape."
 
-echo "[15/15] Testing Landlock Sensitive Path Denial (Doctor Verification)..."
+echo "[15/16] Testing Landlock Sensitive Path Denial (Doctor Verification)..."
 DOCTOR_OUT=$("$SHADOW" doctor)
 if echo "$DOCTOR_OUT" | grep -q "Landlock LSM" && echo "$DOCTOR_OUT" | grep -q "PASS"; then
     echo "  ✔ Passed: Landlock LSM verified active and enforced."
@@ -242,6 +242,28 @@ else
     exit 1
 fi
 
+echo "[16/16] Testing Normal Supported Developer Workload Inside Sandbox..."
+rm -rf "$TEST_DIR"/*
+echo 'fn main() { println!("Hello from sandbox"); }' > main.rs
+set +e
+"$SHADOW" run -- sh -c 'echo "mod feature;" >> main.rs; echo "pub fn test() {}" > feature.rs'
+NORMAL_EXIT=$?
+set -e
+
+if [ $NORMAL_EXIT -ne 0 ]; then
+    echo "FAIL: Standard development workload failed inside sandbox with exit code $NORMAL_EXIT!"
+    exit 1
+fi
+
+DIFF_OUT=$("$SHADOW" diff)
+if echo "$DIFF_OUT" | grep -q "pub fn test()"; then
+    echo "  ✔ Passed: Normal supported command executed successfully with complete diff."
+else
+    echo "FAIL: Diff did not contain expected feature modification!"
+    echo "$DIFF_OUT"
+    exit 1
+fi
+
 echo "============================================="
-echo "   ALL 15 ADVERSARIAL SECURITY TESTS PASSED  "
+echo "   ALL 16 ADVERSARIAL SECURITY TESTS PASSED  "
 echo "============================================="

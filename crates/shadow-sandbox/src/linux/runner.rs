@@ -94,6 +94,12 @@ impl SandboxRunner {
             .stdout(Stdio::from(stdout_file))
             .stderr(Stdio::from(stderr_file));
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
         let mut child = cmd.spawn().map_err(|e| {
             SandboxError::Process(format!("Failed to spawn sandboxed process: {e}"))
         })?;
@@ -128,7 +134,11 @@ impl SandboxRunner {
         };
 
         if meta.backend == SessionBackend::Copy {
-            self.harvest_copy_changes(&copy_root, &paths.upper_dir)?;
+            if let Err(e) = self.harvest_copy_changes(&copy_root, &paths.upper_dir) {
+                // Ensure safe cleanup after a failed capture
+                let _ = std::fs::remove_dir_all(&paths.upper_dir);
+                return Err(e);
+            }
         }
 
         Ok(code)
@@ -137,18 +147,22 @@ impl SandboxRunner {
     fn harvest_copy_changes(&self, copy_root: &Path, upper_dir: &Path) -> Result<()> {
         use walkdir::WalkDir;
         for entry in WalkDir::new(copy_root) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+            let entry = entry.map_err(|e| SandboxError::CopyFsCapture {
+                path: copy_root.to_path_buf(),
+                operation: "walk_harvest",
+                source: std::io::Error::other(e),
+            })?;
             let path = entry.path();
             if path == copy_root {
                 continue;
             }
-            let rel = match path.strip_prefix(copy_root) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
+            let rel = path
+                .strip_prefix(copy_root)
+                .map_err(|e| SandboxError::CopyFsCapture {
+                    path: path.to_path_buf(),
+                    operation: "strip_prefix",
+                    source: std::io::Error::other(e),
+                })?;
             if (rel.starts_with(".git") && rel != Path::new(".git"))
                 || (rel.starts_with("target") && rel != Path::new("target"))
                 || (rel.starts_with("node_modules") && rel != Path::new("node_modules"))
@@ -156,25 +170,66 @@ impl SandboxRunner {
                 continue;
             }
             let dest = upper_dir.join(rel);
-            let meta = match std::fs::symlink_metadata(path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+            let meta =
+                std::fs::symlink_metadata(path).map_err(|e| SandboxError::CopyFsCapture {
+                    path: rel.to_path_buf(),
+                    operation: "metadata",
+                    source: e,
+                })?;
+
             if meta.is_dir() {
-                let _ = std::fs::create_dir_all(&dest);
+                std::fs::create_dir_all(&dest).map_err(|e| SandboxError::CopyFsCapture {
+                    path: rel.to_path_buf(),
+                    operation: "create_dir",
+                    source: e,
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &dest,
+                        std::fs::Permissions::from_mode(meta.permissions().mode()),
+                    );
+                }
             } else if meta.file_type().is_symlink() {
-                if let Ok(target) = std::fs::read_link(path) {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::symlink;
-                        let _ = symlink(&target, &dest);
+                let target = std::fs::read_link(path).map_err(|e| SandboxError::CopyFsCapture {
+                    path: rel.to_path_buf(),
+                    operation: "read_symlink",
+                    source: e,
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::symlink;
+                    if dest.exists() || std::fs::symlink_metadata(&dest).is_ok() {
+                        let _ = std::fs::remove_file(&dest);
                     }
+                    symlink(&target, &dest).map_err(|e| SandboxError::CopyFsCapture {
+                        path: rel.to_path_buf(),
+                        operation: "create_symlink",
+                        source: e,
+                    })?;
                 }
             } else {
                 if let Some(parent) = dest.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    std::fs::create_dir_all(parent).map_err(|e| SandboxError::CopyFsCapture {
+                        path: rel.to_path_buf(),
+                        operation: "create_dir",
+                        source: e,
+                    })?;
                 }
-                let _ = std::fs::copy(path, &dest);
+                std::fs::copy(path, &dest).map_err(|e| SandboxError::CopyFsCapture {
+                    path: rel.to_path_buf(),
+                    operation: "copy_file",
+                    source: e,
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &dest,
+                        std::fs::Permissions::from_mode(meta.permissions().mode()),
+                    );
+                }
             }
         }
         Ok(())

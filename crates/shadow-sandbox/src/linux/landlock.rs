@@ -1,3 +1,29 @@
+//! Landlock LSM Filesystem Access Control
+//!
+//! # Security Model: Default-Deny Mandatory Access Control (MAC)
+//!
+//! Landlock enforces strict, kernel-level Mandatory Access Control. By default, once
+//! Landlock is enforced on a thread, the thread and all future child processes have
+//! **zero filesystem access** to any path on the host. Access is granted strictly via
+//! explicit allowlist rules using `PathBeneath`.
+//!
+//! ## Rule Classification
+//! - **Mandatory Paths:**
+//!   1. `project_root`: Read + Write + Execute + Create (confinement boundary).
+//!   2. `/tmp`: Read + Write (ephemeral scratch space for compilers and interpreters).
+//!   3. `/usr`: Read + Execute (system binaries, tools, and runtimes).
+//!
+//!   If any mandatory rule fails to open or apply, the sandbox **fails closed** immediately.
+//! - **Optional Runtime Paths:** Additional library paths such as `/lib`, `/lib64`, `/opt`,
+//!   `/bin`, `/etc`. If present, descriptors are opened and added to the read allowlist.
+//!
+//! ## Sensitive Path Protection
+//! To prevent accidental or malicious policy misconfigurations from granting access to host
+//! credentials, [`is_blocked_runtime_path`] strictly rejects any configured path resolving to
+//! or containing `/root`, `/home`, `.ssh`, `.aws`, `.gnupg`, `.docker`, `/etc/shadow`, or `/etc/sudoers`.
+//! Note: This deny-list is a secondary defense against configuration error; the primary security
+//! boundary remains Landlock's default-deny kernel LSM.
+
 use crate::error::{Result, SandboxError};
 use landlock::{
     Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,

@@ -20,6 +20,7 @@ pub enum SessionState {
     Running,
     Finished,
     Interrupted,
+    Failed,
     Applied,
     Discarded,
 }

@@ -28,6 +28,7 @@ pub fn execute(json_output: bool) -> Result<i32> {
             SessionState::Running => "running".yellow().bold(),
             SessionState::Finished => "finished".green(),
             SessionState::Interrupted => "interrupted".red(),
+            SessionState::Failed => "failed".red().bold(),
             SessionState::Applied => "applied".cyan(),
             SessionState::Discarded => "discarded".dimmed(),
         };

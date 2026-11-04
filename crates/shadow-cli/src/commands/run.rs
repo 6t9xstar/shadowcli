@@ -137,7 +137,7 @@ pub fn execute(
     let exit_code = match runner.run(&project_root, &paths, &meta, &policy, timeout, &env_vars) {
         Ok(code) => code,
         Err(e) => {
-            meta.state = SessionState::Interrupted;
+            meta.state = SessionState::Failed;
             store.save_meta(&paths, &meta)?;
             eprintln!("{} Sandbox execution failed: {e}", "✖".red().bold());
             return Ok(125);

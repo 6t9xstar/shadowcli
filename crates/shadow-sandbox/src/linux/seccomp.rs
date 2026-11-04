@@ -1,3 +1,33 @@
+//! Seccomp BPF Syscall Filtering Engine
+//!
+//! # Policy Model: Default-Allow with High-Risk Syscall Denylist
+//!
+//! ShadowCLI enforces a default-allow BPF filter with an aggressive denylist of 40
+//! high-risk kernel syscalls.
+//!
+//! ## Why Default-Allow?
+//! AI coding agents execute arbitrary, complex build toolchains (Cargo, GCC, Clang, Go,
+//! Python, Node.js, JVM, etc.). These runtimes invoke hundreds of standard POSIX syscalls
+//! (e.g. `clone3`, `futex`, async I/O, dynamic linker operations).
+//! Enforcing a restrictive default-deny allowlist causes widespread breakage across normal
+//! developer workflows.
+//!
+//! ## Protection Boundary
+//! To neutralize sandbox escape vectors and kernel exploit surfaces, the filter intercepts
+//! and denies with `EPERM` (1):
+//! - Kernel module and executable loading (`init_module`, `finit_module`, `delete_module`, `kexec_load`)
+//! - Kernel tracing, debugging and BPF injection (`ptrace`, `bpf`, `perf_event_open`)
+//! - Namespace re-nesting and escape (`unshare`, `setns`, `chroot`, `pivot_root`, `mount`, `umount2`)
+//! - Keyring and kernel memory access (`keyctl`, `process_vm_readv`, `process_vm_writev`)
+//! - System time skewing and hardware I/O (`clock_settime`, `settimeofday`, `adjtimex`, `iopl`, `ioperm`)
+//! - Asynchronous kernel rings (`io_uring_setup`, `io_uring_enter`, `io_uring_register`)
+//!
+//! ## Architecture & x32 Mitigation
+//! The BPF filter validates `seccomp_data.arch` against `AUDIT_ARCH_X86_64` (or `AUDIT_ARCH_AARCH64`),
+//! immediately terminating foreign-architecture payloads with `SECCOMP_RET_KILL_PROCESS`.
+//! Furthermore, on x86_64, any syscall with `nr >= 0x40000000` (`__X32_SYSCALL_BIT`) is rejected
+//! with `EPERM` to mitigate x32 ABI bypasses.
+
 use crate::error::{Result, SandboxError};
 
 // List of denied syscall names on x86_64 & aarch64
@@ -44,27 +74,7 @@ pub const DENIED_SYSCALLS: &[&str] = &[
     "vmsplice",
 ];
 
-pub fn apply_seccomp_policy() -> Result<()> {
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        return Err(SandboxError::Seccomp(
-            "Seccomp BPF filter currently only supports x86_64 and aarch64 architectures"
-                .to_string(),
-        ));
-    }
-
-    // 1. Ensure PR_SET_NO_NEW_PRIVS is set (mandatory before unprivileged seccomp filter)
-    unsafe {
-        let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-        if ret != 0 {
-            let err = std::io::Error::last_os_error();
-            return Err(SandboxError::Seccomp(format!(
-                "Failed to set PR_SET_NO_NEW_PRIVS: {err}"
-            )));
-        }
-    }
-
-    // 2. Build BPF filter denying dangerous syscalls with EPERM, allowing all others
+pub fn build_seccomp_filter() -> Vec<libc::sock_filter> {
     let mut filter = Vec::new();
 
     // BPF_LD | BPF_W | BPF_ABS: Load arch from seccomp_data.arch (offset 4)
@@ -79,6 +89,8 @@ pub fn apply_seccomp_policy() -> Result<()> {
     let expected_arch = 0xc000003eu32; // AUDIT_ARCH_X86_64
     #[cfg(target_arch = "aarch64")]
     let expected_arch = 0xc00000b7u32; // AUDIT_ARCH_AARCH64
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let expected_arch = 0u32;
 
     filter.push(libc::sock_filter {
         code: 0x15, // BPF_JMP | BPF_JEQ | BPF_K
@@ -207,6 +219,9 @@ pub fn apply_seccomp_policy() -> Result<()> {
         75,  // SYS_vmsplice
     ];
 
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let denied_nrs: [i64; 0] = [];
+
     // For each denied syscall, if equal, return SECCOMP_RET_ERRNO(EPERM = 1)
     for &nr in &denied_nrs {
         filter.push(libc::sock_filter {
@@ -231,6 +246,31 @@ pub fn apply_seccomp_policy() -> Result<()> {
         k: 0x7fff0000, // SECCOMP_RET_ALLOW
     });
 
+    filter
+}
+
+pub fn apply_seccomp_policy() -> Result<()> {
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        return Err(SandboxError::Seccomp(
+            "Seccomp BPF filter currently only supports x86_64 and aarch64 architectures"
+                .to_string(),
+        ));
+    }
+
+    // 1. Ensure PR_SET_NO_NEW_PRIVS is set (mandatory before unprivileged seccomp filter)
+    unsafe {
+        let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(SandboxError::Seccomp(format!(
+                "Failed to set PR_SET_NO_NEW_PRIVS: {err}"
+            )));
+        }
+    }
+
+    // 2. Build BPF filter denying dangerous syscalls with EPERM, allowing all others
+    let mut filter = build_seccomp_filter();
     let prog = libc::sock_fprog {
         len: filter.len() as u16,
         filter: filter.as_mut_ptr(),
@@ -247,4 +287,40 @@ pub fn apply_seccomp_policy() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_denied_syscalls_count() {
+        assert_eq!(DENIED_SYSCALLS.len(), 40);
+        assert!(DENIED_SYSCALLS.contains(&"ptrace"));
+        assert!(DENIED_SYSCALLS.contains(&"unshare"));
+        assert!(DENIED_SYSCALLS.contains(&"chroot"));
+        assert!(DENIED_SYSCALLS.contains(&"bpf"));
+    }
+
+    #[test]
+    fn test_bpf_filter_construction() {
+        let filter = build_seccomp_filter();
+        assert!(!filter.is_empty());
+
+        // Instruction 0: load arch
+        assert_eq!(filter[0].code, 0x20);
+        assert_eq!(filter[0].k, 4);
+
+        // Instruction 1: check arch
+        assert_eq!(filter[1].code, 0x15);
+
+        // Instruction 2: kill if arch mismatch
+        assert_eq!(filter[2].code, 0x06);
+        assert_eq!(filter[2].k, 0x80000000); // SECCOMP_RET_KILL_PROCESS
+
+        // Last instruction: default allow
+        let last = filter.last().unwrap();
+        assert_eq!(last.code, 0x06);
+        assert_eq!(last.k, 0x7fff0000); // SECCOMP_RET_ALLOW
+    }
 }

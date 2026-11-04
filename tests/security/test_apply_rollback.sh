@@ -162,4 +162,40 @@ if [ "$(cat 01_file.txt)" != "initial_a" ]; then
 fi
 echo "✔ Automatic rollback restored pre-apply baseline after validation error."
 
+echo "=== Test 5: Concurrent Apply Exclusion (ApplyLock) ==="
+rm -rf "$TEST_DIR"
+mkdir -p "$TEST_DIR"
+cd "$TEST_DIR"
+echo "init" > doc.txt
+"$SHADOW" run -- sh -c 'echo "concurrent_mod" > doc.txt'
+MY_UID=$(id -u)
+LATEST_SESSION=$(ls -t "/var/tmp/shadowcli-$MY_UID/sessions/" | head -n 1)
+SESSION_DIR="/var/tmp/shadowcli-$MY_UID/sessions/$LATEST_SESSION"
+
+# Simulate concurrent process acquiring session flock
+exec 200>"$SESSION_DIR/apply.lock"
+flock -n 200
+
+set +e
+"$SHADOW" apply --session "$LATEST_SESSION" --all --yes 2>&1 | grep -q "Apply lock violation"
+LOCK_REJECTED=$?
+set -e
+
+# Release lock
+exec 200>&-
+
+if [ $LOCK_REJECTED -ne 0 ]; then
+    echo "FAIL: Concurrent apply was not rejected while session lock was held!"
+    exit 1
+fi
+echo "✔ Concurrent apply safely rejected while session lock was held."
+
+# Now applying after lock release should succeed
+"$SHADOW" apply --session "$LATEST_SESSION" --all --yes >/dev/null 2>&1
+if [ "$(cat doc.txt)" != "concurrent_mod" ]; then
+    echo "FAIL: Apply failed after lock release!"
+    exit 1
+fi
+echo "✔ Apply succeeded after session lock released."
+
 echo "=== ALL APPLY & ROLLBACK TESTS PASSED ==="

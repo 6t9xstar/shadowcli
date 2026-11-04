@@ -17,6 +17,7 @@ unsafe fn setup_signal_forwarding() {
     libc::signal(libc::SIGINT, handler);
     libc::signal(libc::SIGTERM, handler);
     libc::signal(libc::SIGHUP, handler);
+    libc::signal(libc::SIGQUIT, handler);
 }
 
 pub fn run_pid1_init<F>(target_exec: F) -> Result<i32>
@@ -37,6 +38,7 @@ where
             libc::signal(libc::SIGINT, libc::SIG_DFL);
             libc::signal(libc::SIGTERM, libc::SIG_DFL);
             libc::signal(libc::SIGHUP, libc::SIG_DFL);
+            libc::signal(libc::SIGQUIT, libc::SIG_DFL);
         }
         // Target child executes payload
         if let Err(e) = target_exec() {
