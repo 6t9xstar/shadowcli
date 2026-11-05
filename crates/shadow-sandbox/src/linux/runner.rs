@@ -146,7 +146,14 @@ impl SandboxRunner {
 
     fn harvest_copy_changes(&self, copy_root: &Path, upper_dir: &Path) -> Result<()> {
         use walkdir::WalkDir;
-        for entry in WalkDir::new(copy_root) {
+        for entry in WalkDir::new(copy_root).into_iter().filter_entry(|e| {
+            if let Ok(rel) = e.path().strip_prefix(copy_root) {
+                if shadow_core::FileChange::is_disposable_build_artifact(rel) {
+                    return false;
+                }
+            }
+            true
+        }) {
             let entry = entry.map_err(|e| SandboxError::CopyFsCapture {
                 path: copy_root.to_path_buf(),
                 operation: "walk_harvest",
@@ -163,10 +170,7 @@ impl SandboxRunner {
                     operation: "strip_prefix",
                     source: std::io::Error::other(e),
                 })?;
-            if (rel.starts_with(".git") && rel != Path::new(".git"))
-                || (rel.starts_with("target") && rel != Path::new("target"))
-                || (rel.starts_with("node_modules") && rel != Path::new("node_modules"))
-            {
+            if shadow_core::FileChange::is_disposable_build_artifact(rel) {
                 continue;
             }
             let dest = upper_dir.join(rel);
@@ -200,8 +204,12 @@ impl SandboxRunner {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::symlink;
-                    if dest.exists() || std::fs::symlink_metadata(&dest).is_ok() {
-                        let _ = std::fs::remove_file(&dest);
+                    if let Ok(dest_meta) = std::fs::symlink_metadata(&dest) {
+                        if dest_meta.is_dir() {
+                            let _ = std::fs::remove_dir_all(&dest);
+                        } else {
+                            let _ = std::fs::remove_file(&dest);
+                        }
                     }
                     symlink(&target, &dest).map_err(|e| SandboxError::CopyFsCapture {
                         path: rel.to_path_buf(),
@@ -216,6 +224,11 @@ impl SandboxRunner {
                         operation: "create_dir",
                         source: e,
                     })?;
+                }
+                if let Ok(dest_meta) = std::fs::symlink_metadata(&dest) {
+                    if dest_meta.is_dir() {
+                        let _ = std::fs::remove_dir_all(&dest);
+                    }
                 }
                 std::fs::copy(path, &dest).map_err(|e| SandboxError::CopyFsCapture {
                     path: rel.to_path_buf(),

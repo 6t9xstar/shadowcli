@@ -33,10 +33,12 @@ pub fn configure_mount_namespace(
                     let cache_candidates = [
                         ".cargo/registry",
                         ".cargo/git",
+                        ".cargo/bin",
                         ".rustup",
                         ".npm",
                         ".cache/pip",
                         ".cache/go-build",
+                        ".local/bin",
                     ];
                     let mut cache_fds = Vec::new();
                     for rel in &cache_candidates {

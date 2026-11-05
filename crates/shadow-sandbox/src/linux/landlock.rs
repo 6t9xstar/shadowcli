@@ -91,6 +91,7 @@ pub fn is_blocked_runtime_path(path: &Path) -> bool {
 pub fn apply_landlock_restrictions(
     project_root: &Path,
     runtime_paths: &[String],
+    allow_host_home: bool,
     _policy: &ShadowPolicy,
 ) -> Result<()> {
     let kernel_abi = get_landlock_abi();
@@ -144,10 +145,12 @@ pub fn apply_landlock_restrictions(
         let cache_candidates = [
             ".cargo/registry",
             ".cargo/git",
+            ".cargo/bin",
             ".rustup",
             ".npm",
             ".cache/pip",
             ".cache/go-build",
+            ".local/bin",
         ];
         for rel in &cache_candidates {
             let cache_dir = home_path.join(rel);
@@ -167,8 +170,29 @@ pub fn apply_landlock_restrictions(
         }
     }
 
-    // 2. Allow Read + Write on project directory (MANDATORY)
     let all_fs_access = AccessFs::from_all(abi);
+
+    // 1c. Allow Read + Write on isolated private tmpfs $HOME (MANDATORY for compilers/runtimes)
+    // When allow_host_home is false, $HOME is an isolated in-memory tmpfs mount unique to this session.
+    // When allow_host_home is true, $HOME is the host's actual home directory and write access is denied.
+    if !allow_host_home {
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = Path::new(&home);
+            if home_path.exists() && project_root != home_path {
+                if let Ok(home_fd) = PathFd::new(home_path) {
+                    ruleset = ruleset
+                        .add_rule(PathBeneath::new(home_fd, all_fs_access))
+                        .map_err(|e| {
+                            SandboxError::Landlock(format!(
+                                "Failed to add Landlock rule for isolated tmpfs HOME: {e}"
+                            ))
+                        })?;
+                }
+            }
+        }
+    }
+
+    // 2. Allow Read + Write on project directory (MANDATORY)
     let proj_fd = PathFd::new(project_root).map_err(|e| {
         SandboxError::Landlock(format!(
             "Failed to open descriptor for project root '{}': {e}",

@@ -42,13 +42,10 @@ impl ProjectManifest {
             .as_secs();
 
         for entry in WalkDir::new(&canonical_root).into_iter().filter_entry(|e| {
-            // Do not index .git, target, node_modules internal directories for baseline speed
+            // Do not index VCS metadata or disposable build artifacts for speed and consistency
             let p = e.path();
             if let Ok(rel) = p.strip_prefix(&canonical_root) {
-                if (rel.starts_with(".git") && rel != Path::new(".git"))
-                    || (rel.starts_with("target") && rel != Path::new("target"))
-                    || (rel.starts_with("node_modules") && rel != Path::new("node_modules"))
-                {
+                if crate::change::FileChange::is_disposable_build_artifact(rel) {
                     return false;
                 }
             }

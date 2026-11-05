@@ -17,7 +17,14 @@ pub fn setup_copy_workspace(project_root: &Path, copy_root: &Path) -> Result<()>
         source: e,
     })?;
 
-    for entry in WalkDir::new(project_root) {
+    for entry in WalkDir::new(project_root).into_iter().filter_entry(|e| {
+        if let Ok(rel) = e.path().strip_prefix(project_root) {
+            if shadow_core::FileChange::is_disposable_build_artifact(rel) {
+                return false;
+            }
+        }
+        true
+    }) {
         let entry = entry.map_err(|e| SandboxError::CopyFsCapture {
             path: project_root.to_path_buf(),
             operation: "walk_project",
@@ -37,11 +44,8 @@ pub fn setup_copy_workspace(project_root: &Path, copy_root: &Path) -> Result<()>
                     source: std::io::Error::other(e),
                 })?;
 
-        // Skip .git, target, node_modules internal directories for copy speed
-        if (rel_path.starts_with(".git") && rel_path != Path::new(".git"))
-            || (rel_path.starts_with("target") && rel_path != Path::new("target"))
-            || (rel_path.starts_with("node_modules") && rel_path != Path::new("node_modules"))
-        {
+        // Skip VCS metadata and disposable build artifacts for copy speed
+        if shadow_core::FileChange::is_disposable_build_artifact(rel_path) {
             continue;
         }
 

@@ -69,8 +69,13 @@ pub fn execute(
             .map_err(|e| anyhow::anyhow!("Failed to load policy: {e}"))?;
 
         // 6. Apply Landlock restrictions (Mandatory Fail-Closed)
-        apply_landlock_restrictions(&project, &policy.filesystem.runtime_read_paths, &policy)
-            .map_err(|e| anyhow::anyhow!("Landlock LSM enforcement failed: {e}"))?;
+        apply_landlock_restrictions(
+            &project,
+            &policy.filesystem.runtime_read_paths,
+            allow_host_home,
+            &policy,
+        )
+        .map_err(|e| anyhow::anyhow!("Landlock LSM enforcement failed: {e}"))?;
 
         // 7. Apply Seccomp policy (Mandatory Fail-Closed)
         apply_seccomp_policy()

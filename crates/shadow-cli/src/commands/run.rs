@@ -201,6 +201,13 @@ pub fn execute(
     );
     println!();
 
+    if !output.stdout.is_empty() {
+        print!("{}", output.stdout);
+    }
+    if !output.stderr.is_empty() {
+        eprint!("{}", output.stderr);
+    }
+
     println!("\n{}", "Execution Complete".bold());
     println!("Exit code: {}", output.exit_code);
     println!("\n{}", output.changes_summary);
